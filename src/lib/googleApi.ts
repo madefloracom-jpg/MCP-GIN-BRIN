@@ -295,14 +295,14 @@ export async function initializeSpreadsheet(
               fontSize: 10,
               fontFamily: 'Arial'
             },
-            alignment: 'CENTER',
+            horizontalAlignment: 'CENTER',
             verticalAlignment: 'MIDDLE',
             borders: {
               bottom: { style: 'DOUBLE', color: { red: 0.8, green: 0.8, blue: 0.8 } }
             }
           }
         },
-        fields: 'userEnteredFormat(backgroundColor,textFormat,alignment,verticalAlignment,borders)'
+        fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,borders)'
       }
     });
 
