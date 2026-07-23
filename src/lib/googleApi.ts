@@ -284,7 +284,7 @@ export async function initializeSpreadsheet(
           startRowIndex: 0,
           endRowIndex: 1,
           startColumnIndex: 0,
-          endColumnIndex: sheetName === SHEETS.TASKS ? 15 : sheetName === SHEETS.MILESTONES ? 5 : sheetName === SHEETS.RISKS ? 6 : 4
+          endColumnIndex: sheetName === SHEETS.TASKS ? 18 : sheetName === SHEETS.MILESTONES ? 5 : sheetName === SHEETS.RISKS ? 6 : 4
         },
         cell: {
           userEnteredFormat: {
@@ -408,7 +408,7 @@ export async function fetchProjectData(accessToken: string, spreadsheetId: strin
   logs: ActivityLog[];
 }> {
   const configRange = `'${SHEETS.CONFIG}'!A:B`;
-  const tasksRange = `'${SHEETS.TASKS}'!A:O`;
+  const tasksRange = `'${SHEETS.TASKS}'!A:R`;
   const milestonesRange = `'${SHEETS.MILESTONES}'!A:E`;
   const teamRange = `'${SHEETS.TEAM}'!A:D`;
   const risksRange = `'${SHEETS.RISKS}'!A:F`;
