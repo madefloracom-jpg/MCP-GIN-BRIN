@@ -711,6 +711,7 @@ export default function App() {
                 onAddTask={handleAddTask}
                 onUpdateTask={handleUpdateTask}
                 onDeleteTask={handleDeleteTask}
+                accessToken={accessToken}
               />
             )}
 
@@ -719,6 +720,7 @@ export default function App() {
                 tasks={tasks}
                 teamMembers={teamMembers}
                 onUpdateTask={handleUpdateTask}
+                accessToken={accessToken}
               />
             )}
 

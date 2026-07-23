@@ -30,6 +30,20 @@ export interface ChecklistGroup {
   items: ChecklistItem[];
 }
 
+export interface AgendaItem {
+  id: string;
+  title: string;
+  date: string; // YYYY-MM-DD
+  startTime?: string; // HH:mm
+  endTime?: string; // HH:mm
+  location?: string;
+  notes?: string;
+  attendees?: string[];
+  googleEventId?: string;
+  googleEventLink?: string;
+  syncedAt?: string;
+}
+
 export interface TaskActivityItem {
   id: string;
   type: 'comment' | 'internal_note' | 'status_change' | 'attachment' | 'ai_summary';
@@ -66,6 +80,7 @@ export interface Task {
   attachmentUrl: string;
   subtasks?: SubtaskItem[];
   checklists?: ChecklistGroup[];
+  agendas?: AgendaItem[];
   activities?: TaskActivityItem[];
 }
 

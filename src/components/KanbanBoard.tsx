@@ -28,11 +28,12 @@ interface KanbanBoardProps {
   tasks: Task[];
   teamMembers: TeamMember[];
   onUpdateTask: (task: Task) => void;
+  accessToken?: string | null;
 }
 
 const COLUMNS: TaskStatus[] = ['To Do', 'In Progress', 'Completed'];
 
-export default function KanbanBoard({ tasks, teamMembers, onUpdateTask }: KanbanBoardProps) {
+export default function KanbanBoard({ tasks, teamMembers, onUpdateTask, accessToken }: KanbanBoardProps) {
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [activityModalTask, setActivityModalTask] = useState<Task | null>(null);
   
@@ -392,96 +393,100 @@ export default function KanbanBoard({ tasks, teamMembers, onUpdateTask }: Kanban
 
             {/* Modal Content */}
             <div className="p-6">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                
-                {/* Left Column: Task Context & Quick Controls */}
-                <div className="lg:col-span-6 space-y-4">
-                  <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-100 space-y-3">
-                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Workflow Task Summary</h4>
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200/60">
-                        <span className="text-slate-400 block text-[10px] font-medium">Status Stage</span>
-                        <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.status}</span>
+              <TaskActivityAndWorkflow
+                summaryContent={
+                  <div className="bg-slate-50/80 p-4 rounded-xl border border-slate-200 shadow-xs h-full flex flex-col justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Workflow Task Summary</h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200/60 shadow-2xs">
+                          <span className="text-slate-400 block text-[10px] font-medium">Status Stage</span>
+                          <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.status}</span>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200/60 shadow-2xs">
+                          <span className="text-slate-400 block text-[10px] font-medium">Progress</span>
+                          <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.progress}%</span>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200/60 shadow-2xs">
+                          <span className="text-slate-400 block text-[10px] font-medium">Priority</span>
+                          <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.priority || 'Normal'}</span>
+                        </div>
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200/60 shadow-2xs">
+                          <span className="text-slate-400 block text-[10px] font-medium">Target Completion</span>
+                          <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.endDate || '-'}</span>
+                        </div>
                       </div>
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200/60">
-                        <span className="text-slate-400 block text-[10px] font-medium">Progress</span>
-                        <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.progress}%</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200/60">
-                        <span className="text-slate-400 block text-[10px] font-medium">Priority</span>
-                        <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.priority || 'Normal'}</span>
-                      </div>
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200/60">
-                        <span className="text-slate-400 block text-[10px] font-medium">Target Completion</span>
-                        <span className="font-bold text-slate-800 text-xs mt-0.5 block">{activityModalTask.endDate || '-'}</span>
-                      </div>
+                      {activityModalTask.notes && (
+                        <div className="pt-2.5 mt-2.5 border-t border-slate-200/60">
+                          <span className="text-slate-400 block text-[10px] font-medium">Scope / Engineering Details</span>
+                          <p className="text-xs text-slate-700 mt-1 leading-relaxed bg-white p-2.5 rounded-xl border border-slate-200/60">{activityModalTask.notes}</p>
+                        </div>
+                      )}
                     </div>
-                    {activityModalTask.notes && (
-                      <div className="pt-2 border-t border-slate-200/60">
-                        <span className="text-slate-400 block text-[10px] font-medium">Scope / Engineering Details</span>
-                        <p className="text-xs text-slate-700 mt-1 leading-relaxed bg-white p-2.5 rounded-xl border border-slate-200/60">{activityModalTask.notes}</p>
-                      </div>
-                    )}
                   </div>
-
-                  {/* Subtasks editor in modal */}
-                  <SubtasksEditor
-                    subtasks={activityModalTask.subtasks || []}
-                    onChange={(updatedSubs) => {
-                      const updated = { ...activityModalTask, subtasks: updatedSubs };
-                      setActivityModalTask(updated);
-                      onUpdateTask(updated);
-                    }}
-                    teamMembers={teamMembers}
-                  />
-                </div>
-
-                {/* Right Column: Workflow Pipeline & Activity Feed */}
-                <div className="lg:col-span-6">
-                  <TaskActivityAndWorkflow
-                    status={activityModalTask.status}
-                    onStatusChange={(newStat) => {
-                      const act: TaskActivityItem = {
-                        id: 'act_' + Date.now(),
-                        type: 'status_change',
-                        user: 'You',
-                        timestamp: 'Just now',
-                        fromStatus: activityModalTask.status,
-                        toStatus: newStat
-                      };
-                      const updated = {
-                        ...activityModalTask,
-                        status: newStat,
-                        progress: newStat === 'Completed' ? 100 : activityModalTask.progress,
-                        activities: [act, ...(activityModalTask.activities || [])]
-                      };
-                      setActivityModalTask(updated);
-                      onUpdateTask(updated);
-                    }}
-                    activities={activityModalTask.activities || []}
-                    onAddActivity={(item) => {
-                      const updated = {
-                        ...activityModalTask,
-                        activities: [item, ...(activityModalTask.activities || [])]
-                      };
-                      setActivityModalTask(updated);
-                      onUpdateTask(updated);
-                    }}
-                    checklists={activityModalTask.checklists || []}
-                    onChecklistsChange={(updatedCls) => {
-                      const updated = {
-                        ...activityModalTask,
-                        checklists: updatedCls
-                      };
-                      setActivityModalTask(updated);
-                      onUpdateTask(updated);
-                    }}
-                    teamMembers={teamMembers}
-                    currentUserName="You"
-                  />
-                </div>
-
-              </div>
+                }
+                status={activityModalTask.status}
+                onStatusChange={(newStat) => {
+                  const act: TaskActivityItem = {
+                    id: 'act_' + Date.now(),
+                    type: 'status_change',
+                    user: 'You',
+                    timestamp: 'Just now',
+                    fromStatus: activityModalTask.status,
+                    toStatus: newStat
+                  };
+                  const updated = {
+                    ...activityModalTask,
+                    status: newStat,
+                    progress: newStat === 'Completed' ? 100 : activityModalTask.progress,
+                    activities: [act, ...(activityModalTask.activities || [])]
+                  };
+                  setActivityModalTask(updated);
+                  onUpdateTask(updated);
+                }}
+                activities={activityModalTask.activities || []}
+                onAddActivity={(item) => {
+                  const updated = {
+                    ...activityModalTask,
+                    activities: [item, ...(activityModalTask.activities || [])]
+                  };
+                  setActivityModalTask(updated);
+                  onUpdateTask(updated);
+                }}
+                subtasks={activityModalTask.subtasks || []}
+                onSubtasksChange={(updatedSubs) => {
+                  const updated = {
+                    ...activityModalTask,
+                    subtasks: updatedSubs
+                  };
+                  setActivityModalTask(updated);
+                  onUpdateTask(updated);
+                }}
+                checklists={activityModalTask.checklists || []}
+                onChecklistsChange={(updatedCls) => {
+                  const updated = {
+                    ...activityModalTask,
+                    checklists: updatedCls
+                  };
+                  setActivityModalTask(updated);
+                  onUpdateTask(updated);
+                }}
+                agendas={activityModalTask.agendas || []}
+                onAgendasChange={(updatedAgendas) => {
+                  const updated = {
+                    ...activityModalTask,
+                    agendas: updatedAgendas
+                  };
+                  setActivityModalTask(updated);
+                  onUpdateTask(updated);
+                }}
+                taskTitle={activityModalTask.name}
+                taskStartDate={activityModalTask.startDate}
+                taskEndDate={activityModalTask.endDate}
+                accessToken={accessToken}
+                teamMembers={teamMembers}
+                currentUserName="You"
+              />
             </div>
 
             {/* Modal Footer */}

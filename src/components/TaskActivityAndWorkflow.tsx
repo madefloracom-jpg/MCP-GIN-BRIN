@@ -25,10 +25,13 @@ import {
   X,
   MessageSquare,
   ShieldAlert,
-  CheckSquare
+  CheckSquare,
+  Calendar
 } from 'lucide-react';
-import { TaskStatus, TaskActivityItem, TeamMember, ChecklistGroup } from '../types';
+import { TaskStatus, TaskActivityItem, TeamMember, ChecklistGroup, SubtaskItem, AgendaItem } from '../types';
 import ChecklistsEditor from './ChecklistsEditor';
+import SubtasksEditor from './SubtasksEditor';
+import AgendaEditor from './AgendaEditor';
 
 interface TaskActivityAndWorkflowProps {
   status: TaskStatus;
@@ -37,8 +40,17 @@ interface TaskActivityAndWorkflowProps {
   onAddActivity: (item: TaskActivityItem) => void;
   teamMembers: TeamMember[];
   currentUserName?: string;
+  subtasks?: SubtaskItem[];
+  onSubtasksChange?: (subtasks: SubtaskItem[]) => void;
   checklists?: ChecklistGroup[];
   onChecklistsChange?: (checklists: ChecklistGroup[]) => void;
+  agendas?: AgendaItem[];
+  onAgendasChange?: (agendas: AgendaItem[]) => void;
+  taskTitle?: string;
+  taskStartDate?: string;
+  taskEndDate?: string;
+  accessToken?: string | null;
+  summaryContent?: React.ReactNode;
 }
 
 const STAGES: { key: TaskStatus; label: string; icon: React.ReactNode; color: string; bgColor: string; borderColor: string; dotColor: string }[] = [
@@ -78,14 +90,35 @@ export default function TaskActivityAndWorkflow({
   onAddActivity,
   teamMembers,
   currentUserName = 'You',
+  subtasks,
+  onSubtasksChange,
   checklists,
-  onChecklistsChange
+  onChecklistsChange,
+  agendas,
+  onAgendasChange,
+  taskTitle = 'Task Discussion',
+  taskStartDate,
+  taskEndDate,
+  accessToken,
+  summaryContent
 }: TaskActivityAndWorkflowProps) {
   // Active Tab state
-  const [activeTab, setActiveTab] = useState<'activity' | 'checklists'>('activity');
+  const [activeTab, setActiveTab] = useState<'activity' | 'subtasks' | 'checklists' | 'agenda'>('activity');
+  const [internalSubtasks, setInternalSubtasks] = useState<SubtaskItem[]>([]);
   const [internalChecklists, setInternalChecklists] = useState<ChecklistGroup[]>([]);
+  const [internalAgendas, setInternalAgendas] = useState<AgendaItem[]>([]);
 
+  const effectiveSubtasks = subtasks !== undefined ? subtasks : internalSubtasks;
   const effectiveChecklists = checklists !== undefined ? checklists : internalChecklists;
+  const effectiveAgendas = agendas !== undefined ? agendas : internalAgendas;
+
+  const handleSubtasksChange = (updated: SubtaskItem[]) => {
+    if (onSubtasksChange) {
+      onSubtasksChange(updated);
+    } else {
+      setInternalSubtasks(updated);
+    }
+  };
 
   const handleChecklistsChange = (updated: ChecklistGroup[]) => {
     if (onChecklistsChange) {
@@ -95,9 +128,22 @@ export default function TaskActivityAndWorkflow({
     }
   };
 
+  const handleAgendasChange = (updated: AgendaItem[]) => {
+    if (onAgendasChange) {
+      onAgendasChange(updated);
+    } else {
+      setInternalAgendas(updated);
+    }
+  };
+
+  const totalSubtasksCount = effectiveSubtasks.length;
+  const completedSubtasksCount = effectiveSubtasks.filter(s => s.completed).length;
+
   const allClItems = effectiveChecklists.flatMap(g => g.items || []);
   const completedClCount = allClItems.filter(i => i.completed).length;
   const totalClCount = allClItems.length;
+
+  const totalAgendasCount = effectiveAgendas.length;
 
   // Comment input state
   const [commentText, setCommentText] = useState('');
@@ -189,75 +235,99 @@ export default function TaskActivityAndWorkflow({
     return false;
   });
 
-  return (
-    <div className="space-y-6">
-      
-      {/* ================= WORKFLOW PIPELINE ================= */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
-              Workflow Pipeline
-            </span>
-            {totalClCount > 0 && (
-              <button
-                type="button"
-                onClick={() => setActiveTab('checklists')}
-                className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-all cursor-pointer"
-                title="View & Edit Task Checklists"
-              >
-                <CheckSquare className="h-3 w-3" />
-                <span>Checklists {completedClCount}/{totalClCount}</span>
-              </button>
-            )}
-          </div>
-          <span className="text-[11px] text-slate-500 font-medium">
-            Click step to update status
+  const pipelineCard = (
+    <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs h-full flex flex-col justify-between">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-blue-600 animate-pulse"></span>
+            Workflow Pipeline
           </span>
+          {totalSubtasksCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('subtasks')}
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-all cursor-pointer"
+              title="View & Edit Task Subtasks"
+            >
+              <ListTodo className="h-3 w-3" />
+              <span>Subtasks {completedSubtasksCount}/{totalSubtasksCount}</span>
+            </button>
+          )}
+          {totalClCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('checklists')}
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-all cursor-pointer"
+              title="View & Edit Task Checklists"
+            >
+              <CheckSquare className="h-3 w-3" />
+              <span>Checklists {completedClCount}/{totalClCount}</span>
+            </button>
+          )}
         </div>
-
-        {/* Pipeline Step Bar */}
-        <div className="relative flex items-center justify-between gap-2 p-1.5 bg-slate-50 rounded-xl border border-slate-200/80">
-          {STAGES.map((stage, idx) => {
-            const isActive = activeStatus === stage.key;
-            const isPassed = STAGES.findIndex(s => s.key === activeStatus) > idx;
-
-            return (
-              <React.Fragment key={stage.key}>
-                <button
-                  type="button"
-                  onClick={() => handleStageClick(stage.key)}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all relative z-10 cursor-pointer ${
-                    isActive 
-                      ? 'bg-white text-slate-900 shadow-sm border border-slate-300 ring-2 ring-blue-500/20' 
-                      : isPassed
-                        ? 'bg-slate-200/60 text-slate-700 hover:bg-slate-200'
-                        : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-800'
-                  }`}
-                >
-                  <span className={`h-2.5 w-2.5 rounded-full ${isActive ? stage.dotColor : isPassed ? 'bg-slate-600' : 'bg-slate-300'}`}></span>
-                  <span>{stage.label}</span>
-                  {isActive && (
-                    <span className="ml-1 text-[9px] px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded font-bold uppercase">
-                      Current
-                    </span>
-                  )}
-                </button>
-
-                {idx < STAGES.length - 1 && (
-                  <div className="flex items-center justify-center text-slate-300">
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </div>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </div>
+        <span className="text-[11px] text-slate-500 font-medium">
+          Click step to update status
+        </span>
       </div>
 
-      {/* ================= ACTIVITY & CHECKLISTS SECTION ================= */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden flex flex-col">
+      {/* Pipeline Step Bar */}
+      <div className="relative flex items-center justify-between gap-2 p-1.5 bg-slate-50 rounded-xl border border-slate-200/80">
+        {STAGES.map((stage, idx) => {
+          const isActive = activeStatus === stage.key;
+          const isPassed = STAGES.findIndex(s => s.key === activeStatus) > idx;
+
+          return (
+            <React.Fragment key={stage.key}>
+              <button
+                type="button"
+                onClick={() => handleStageClick(stage.key)}
+                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-bold transition-all relative z-10 cursor-pointer ${
+                  isActive 
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-300 ring-2 ring-blue-500/20' 
+                    : isPassed
+                      ? 'bg-slate-200/60 text-slate-700 hover:bg-slate-200'
+                      : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-800'
+                }`}
+              >
+                <span className={`h-2.5 w-2.5 rounded-full ${isActive ? stage.dotColor : isPassed ? 'bg-slate-600' : 'bg-slate-300'}`}></span>
+                <span>{stage.label}</span>
+                {isActive && (
+                  <span className="ml-1 text-[9px] px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded font-bold uppercase">
+                    Current
+                  </span>
+                )}
+              </button>
+
+              {idx < STAGES.length - 1 && (
+                <div className="flex items-center justify-center text-slate-300">
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      
+      {/* 1. TOP SECTION: Task Form Parameters / Summary (Full Width) */}
+      {summaryContent && (
+        <div className="w-full">
+          {summaryContent}
+        </div>
+      )}
+
+      {/* 2. MIDDLE SECTION: Workflow Pipeline (Full Width, directly below Task Form Parameters) */}
+      <div className="w-full">
+        {pipelineCard}
+      </div>
+
+      {/* 3. BOTTOM SECTION: TAB containing Activity, Subtasks, Checklists, Agenda (Full Width) */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden flex flex-col w-full">
         
         {/* Header Tabs */}
         <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
@@ -281,6 +351,22 @@ export default function TaskActivityAndWorkflow({
 
             <button
               type="button"
+              onClick={() => setActiveTab('subtasks')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                activeTab === 'subtasks'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <ListTodo className="h-3.5 w-3.5 text-blue-600" />
+              <span>Subtasks</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${totalSubtasksCount > 0 && completedSubtasksCount === totalSubtasksCount ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
+                {totalSubtasksCount > 0 ? `${completedSubtasksCount}/${totalSubtasksCount}` : '0'}
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('checklists')}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
                 activeTab === 'checklists'
@@ -292,6 +378,22 @@ export default function TaskActivityAndWorkflow({
               <span>Checklists</span>
               <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${totalClCount > 0 && completedClCount === totalClCount ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
                 {totalClCount > 0 ? `${completedClCount}/${totalClCount}` : '0'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('agenda')}
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                activeTab === 'agenda'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Calendar className="h-3.5 w-3.5 text-blue-600" />
+              <span>Agenda</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${totalAgendasCount > 0 ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-700'}`}>
+                {totalAgendasCount}
               </span>
             </button>
           </div>
@@ -336,13 +438,41 @@ export default function TaskActivityAndWorkflow({
           )}
         </div>
 
-        {/* TAB 1: CHECKLISTS VIEW */}
+        {/* TAB 1: SUBTASKS VIEW */}
+        {activeTab === 'subtasks' && (
+          <div className="p-4 bg-white min-h-[220px]">
+            <SubtasksEditor
+              subtasks={effectiveSubtasks}
+              onChange={handleSubtasksChange}
+              teamMembers={teamMembers}
+              className="border-0 shadow-none p-0 bg-transparent"
+            />
+          </div>
+        )}
+
+        {/* TAB 2: CHECKLISTS VIEW */}
         {activeTab === 'checklists' && (
           <div className="p-4 bg-white min-h-[220px]">
             <ChecklistsEditor
               checklists={effectiveChecklists}
               onChange={handleChecklistsChange}
               teamMembers={teamMembers}
+            />
+          </div>
+        )}
+
+        {/* TAB 3: AGENDA VIEW */}
+        {activeTab === 'agenda' && (
+          <div className="p-4 bg-white min-h-[220px]">
+            <AgendaEditor
+              agendas={effectiveAgendas}
+              onChange={handleAgendasChange}
+              teamMembers={teamMembers}
+              taskTitle={taskTitle}
+              taskStartDate={taskStartDate}
+              taskEndDate={taskEndDate}
+              accessToken={accessToken}
+              className="border-0 shadow-none p-0 bg-transparent"
             />
           </div>
         )}
@@ -431,6 +561,38 @@ export default function TaskActivityAndWorkflow({
                     + {allClItems.length - 3} more checklist items...
                   </button>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* Agenda Summary Box (if present) */}
+          {totalAgendasCount > 0 && (
+            <div className="p-3 bg-blue-50/70 border border-blue-200/80 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-blue-900">
+                  <Calendar className="h-4 w-4 text-blue-600" />
+                  <span>Agenda & Google Kalender ({totalAgendasCount})</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('agenda')}
+                  className="text-[11px] font-bold text-blue-700 hover:text-blue-900 hover:underline cursor-pointer"
+                >
+                  Atur Agenda →
+                </button>
+              </div>
+
+              <div className="space-y-1.5 pt-0.5">
+                {effectiveAgendas.slice(0, 2).map((item) => (
+                  <div key={item.id} className="flex items-center justify-between text-xs bg-white px-2.5 py-1.5 rounded-lg border border-blue-100 shadow-2xs">
+                    <div className="truncate font-semibold text-slate-800 pr-2">
+                      {item.title}
+                    </div>
+                    <div className="shrink-0 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                      {item.date} {item.startTime && `(${item.startTime})`}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

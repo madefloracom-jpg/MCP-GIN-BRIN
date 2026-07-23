@@ -892,3 +892,103 @@ export async function deleteDriveFile(accessToken: string, fileId: string, folde
 
   throw new Error(`Gagal menghapus file dari Drive: ${detailedMsg}`);
 }
+
+/**
+ * Generates a Google Calendar web URL to open event creation in a new browser tab.
+ */
+export function getGoogleCalendarWebUrl(event: {
+  title: string;
+  description?: string;
+  location?: string;
+  startDate: string;
+  endDate?: string;
+  startTime?: string;
+  endTime?: string;
+}) {
+  const title = encodeURIComponent(event.title || 'Task Agenda');
+  const details = encodeURIComponent(event.description || '');
+  const location = encodeURIComponent(event.location || '');
+  
+  let datesStr = '';
+  if (event.startDate) {
+    const sDate = event.startDate.replace(/-/g, '');
+    const eDate = (event.endDate || event.startDate).replace(/-/g, '');
+    if (event.startTime) {
+      const sTime = event.startTime.replace(':', '') + '00';
+      const eTime = (event.endTime || event.startTime).replace(':', '') + '00';
+      datesStr = `${sDate}T${sTime}/${eDate}T${eTime}`;
+    } else {
+      datesStr = `${sDate}/${eDate}`;
+    }
+  }
+  
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}&location=${location}&dates=${datesStr}`;
+}
+
+/**
+ * Creates or updates an event in Google Calendar using the Google Calendar REST API.
+ */
+export async function syncEventToGoogleCalendar(
+  accessToken: string,
+  event: {
+    title: string;
+    description?: string;
+    location?: string;
+    startDate: string;
+    endDate?: string;
+    startTime?: string;
+    endTime?: string;
+    attendees?: string[];
+    eventId?: string;
+  }
+): Promise<{ id: string; htmlLink: string }> {
+  const startObj = event.startTime 
+    ? { dateTime: new Date(`${event.startDate}T${event.startTime}:00`).toISOString() }
+    : { date: event.startDate };
+
+  const endObj = event.endTime 
+    ? { dateTime: new Date(`${event.endDate || event.startDate}T${event.endTime}:00`).toISOString() }
+    : { date: event.endDate || event.startDate };
+
+  const body: any = {
+    summary: event.title,
+    description: event.description,
+    location: event.location,
+    start: startObj,
+    end: endObj
+  };
+
+  if (event.attendees && event.attendees.length > 0) {
+    body.attendees = event.attendees.map(email => ({ email }));
+  }
+
+  const method = event.eventId ? 'PATCH' : 'POST';
+  const url = event.eventId
+    ? `https://www.googleapis.com/calendar/v3/calendars/primary/events/${event.eventId}`
+    : `https://www.googleapis.com/calendar/v3/calendars/primary/events`;
+
+  const data = await apiFetch(url, accessToken, {
+    method,
+    body: JSON.stringify(body)
+  });
+
+  return {
+    id: data.id,
+    htmlLink: data.htmlLink || `https://calendar.google.com/calendar/event?eid=${data.id}`
+  };
+}
+
+/**
+ * Deletes an event from Google Calendar.
+ */
+export async function deleteGoogleCalendarEvent(accessToken: string, eventId: string): Promise<void> {
+  if (!eventId) return;
+  try {
+    await apiFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, accessToken, {
+      method: 'DELETE'
+    });
+  } catch (err) {
+    console.warn(`Could not delete Google Calendar event ${eventId}:`, err);
+  }
+}
+

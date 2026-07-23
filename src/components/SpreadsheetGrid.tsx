@@ -21,7 +21,7 @@ import {
   X,
   UserPlus
 } from 'lucide-react';
-import { Task, TaskStatus, RiskLevel, TaskPriority, TeamMember, SubtaskItem, ChecklistGroup, TaskActivityItem } from '../types';
+import { Task, TaskStatus, RiskLevel, TaskPriority, TeamMember, SubtaskItem, ChecklistGroup, TaskActivityItem, AgendaItem } from '../types';
 import { isParentTask } from '../lib/rollup';
 import SubtasksEditor from './SubtasksEditor';
 import ChecklistsEditor from './ChecklistsEditor';
@@ -33,6 +33,7 @@ interface SpreadsheetGridProps {
   onAddTask: (task: Omit<Task, 'id'>) => void;
   onUpdateTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
+  accessToken?: string | null;
 }
 
 export default function SpreadsheetGrid({ 
@@ -40,7 +41,8 @@ export default function SpreadsheetGrid({
   teamMembers, 
   onAddTask, 
   onUpdateTask, 
-  onDeleteTask 
+  onDeleteTask,
+  accessToken
 }: SpreadsheetGridProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
@@ -66,6 +68,7 @@ export default function SpreadsheetGrid({
   const [newPredecessors, setNewPredecessors] = useState<string[]>([]);
   const [newSubtasks, setNewSubtasks] = useState<SubtaskItem[]>([]);
   const [newChecklists, setNewChecklists] = useState<ChecklistGroup[]>([]);
+  const [newAgendas, setNewAgendas] = useState<AgendaItem[]>([]);
   const [newActivities, setNewActivities] = useState<TaskActivityItem[]>([
     {
       id: 'act_init_' + Date.now(),
@@ -163,6 +166,7 @@ export default function SpreadsheetGrid({
       attachmentUrl: '',
       subtasks: newSubtasks,
       checklists: newChecklists,
+      agendas: newAgendas,
       activities: newActivities
     });
 
@@ -179,6 +183,7 @@ export default function SpreadsheetGrid({
     setNewPredecessors([]);
     setNewSubtasks([]);
     setNewChecklists([]);
+    setNewAgendas([]);
     setNewActivities([
       {
         id: 'act_init_' + Date.now(),
@@ -469,202 +474,183 @@ export default function SpreadsheetGrid({
             </div>
 
             <form onSubmit={handleAddTaskSubmit} className="p-6">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                
-                {/* Left Column: Task Form Parameters */}
-                <div className="lg:col-span-7 space-y-4">
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">WBS Code</label>
-                      <input 
-                        type="text" 
-                        value={newWbs} 
-                        onChange={e => setNewWbs(e.target.value)} 
-                        placeholder="e.g. 1.1 or 2.3.1"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono"
-                        required
-                      />
+              <TaskActivityAndWorkflow
+                summaryContent={
+                  <div className="bg-slate-50/80 p-4 rounded-xl border border-slate-200 shadow-xs space-y-4">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Task Form Parameters</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">WBS Code</label>
+                        <input 
+                          type="text" 
+                          value={newWbs} 
+                          onChange={e => setNewWbs(e.target.value)} 
+                          placeholder="e.g. 1.1 or 2.3.1"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono bg-white"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Task Title</label>
+                        <input 
+                          type="text" 
+                          value={newName} 
+                          onChange={e => setNewName(e.target.value)} 
+                          placeholder="e.g. Concrete slab foundations pouring"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold bg-white"
+                          required
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Task Title</label>
-                      <input 
-                        type="text" 
-                        value={newName} 
-                        onChange={e => setNewName(e.target.value)} 
-                        placeholder="e.g. Concrete slab foundations pouring"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold"
-                        required
-                      />
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
-                      <select 
-                        value={newStatus} 
-                        onChange={e => {
-                          const stat = e.target.value as TaskStatus;
-                          setNewStatus(stat);
-                          if (stat === 'Completed') setNewProgress(100);
-                        }}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs"
-                      >
-                        <option value="To Do">To Do</option>
-                        <option value="In Progress">In Progress</option>
-                        <option value="Completed">Completed</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center justify-between">
-                        <span>Priority</span>
-                        {newPriority && (
-                          <button 
-                            type="button" 
-                            onClick={() => setNewPriority('')}
-                            className="text-[10px] text-rose-600 hover:underline normal-case font-normal"
-                          >
-                            Clear Priority
-                          </button>
-                        )}
-                      </label>
-                      <select 
-                        value={newPriority} 
-                        onChange={e => setNewPriority(e.target.value as TaskPriority | '')}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs"
-                      >
-                        <option value="">-- Clear (Tanpa Priority) --</option>
-                        <option value="Urgent">🔥 Urgent</option>
-                        <option value="High">⚠️ High</option>
-                        <option value="Normal">⚡ Normal</option>
-                        <option value="Low">🌱 Low</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Progress (%)</label>
-                      <input 
-                        type="number" 
-                        min="0" max="100" 
-                        value={newProgress} 
-                        onChange={e => setNewProgress(Number(e.target.value))} 
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Start Date</label>
-                      <input 
-                        type="date" 
-                        value={newStart} 
-                        onChange={e => setNewStart(e.target.value)} 
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">End Date</label>
-                      <input 
-                        type="date" 
-                        value={newEnd} 
-                        onChange={e => setNewEnd(e.target.value)} 
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Assignees selector list */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 flex items-center gap-1">
-                      <UserPlus className="h-3.5 w-3.5" />
-                      Assign Team Resources
-                    </label>
-                    <div className="flex flex-wrap gap-2 p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                      {teamMembers.length === 0 ? (
-                        <span className="text-[10px] text-slate-400">No team members registered. Please add team members in the side panel first.</span>
-                      ) : (
-                        teamMembers.map(m => {
-                          const isAssigned = newAssignees.includes(m.email);
-                          return (
-                            <div 
-                              key={m.email}
-                              onClick={() => toggleAssignee(m.email, false)}
-                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-2 cursor-pointer transition-all ${
-                                isAssigned 
-                                  ? 'bg-slate-900 border-slate-900 text-white shadow-xs' 
-                                  : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
-                              }`}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
+                        <select 
+                          value={newStatus} 
+                          onChange={e => {
+                            const stat = e.target.value as TaskStatus;
+                            setNewStatus(stat);
+                            if (stat === 'Completed') setNewProgress(100);
+                          }}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white"
+                        >
+                          <option value="To Do">To Do</option>
+                          <option value="In Progress">In Progress</option>
+                          <option value="Completed">Completed</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center justify-between">
+                          <span>Priority</span>
+                          {newPriority && (
+                            <button 
+                              type="button" 
+                              onClick={() => setNewPriority('')}
+                              className="text-[10px] text-rose-600 hover:underline normal-case font-normal"
                             >
-                              <img src={m.avatarUrl} alt={m.name} className="h-4 w-4 rounded-full" />
-                              <span className="text-[10px] font-semibold">{m.name}</span>
-                            </div>
-                          );
-                        })
-                      )}
+                              Clear Priority
+                            </button>
+                          )}
+                        </label>
+                        <select 
+                          value={newPriority} 
+                          onChange={e => setNewPriority(e.target.value as TaskPriority | '')}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white"
+                        >
+                          <option value="">-- Clear (Tanpa Priority) --</option>
+                          <option value="Urgent">🔥 Urgent</option>
+                          <option value="High">⚠️ High</option>
+                          <option value="Normal">⚡ Normal</option>
+                          <option value="Low">🌱 Low</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Progress (%)</label>
+                        <input 
+                          type="number" 
+                          min="0" max="100" 
+                          value={newProgress} 
+                          onChange={e => setNewProgress(Number(e.target.value))} 
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Start Date</label>
+                        <input 
+                          type="date" 
+                          value={newStart} 
+                          onChange={e => setNewStart(e.target.value)} 
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">End Date</label>
+                        <input 
+                          type="date" 
+                          value={newEnd} 
+                          onChange={e => setNewEnd(e.target.value)} 
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 flex items-center gap-1">
+                        <UserPlus className="h-3.5 w-3.5" />
+                        Assign Team Resources
+                      </label>
+                      <div className="flex flex-wrap gap-2 p-2.5 bg-white border border-slate-200/80 rounded-xl">
+                        {teamMembers.length === 0 ? (
+                          <span className="text-[10px] text-slate-400">No team members registered. Please add team members in the side panel first.</span>
+                        ) : (
+                          teamMembers.map(m => {
+                            const isAssigned = newAssignees.includes(m.email);
+                            return (
+                              <div 
+                                key={m.email}
+                                onClick={() => toggleAssignee(m.email, false)}
+                                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border-2 cursor-pointer transition-all ${
+                                  isAssigned 
+                                    ? 'bg-slate-900 border-slate-900 text-white shadow-xs' 
+                                    : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                                }`}
+                              >
+                                <img src={m.avatarUrl} alt={m.name} className="h-4 w-4 rounded-full" />
+                                <span className="text-[10px] font-semibold">{m.name}</span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Predecessor WBS or ID</label>
+                      <input 
+                        type="text" 
+                        value={newPredecessors.join(',')} 
+                        onChange={e => setNewPredecessors(e.target.value.split(',').map(s => s.trim()).filter(Boolean))} 
+                        placeholder="e.g. WBS_1, WBS_2 or task code values"
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes / Scope details</label>
+                      <textarea 
+                        value={newNotes} 
+                        onChange={e => setNewNotes(e.target.value)} 
+                        placeholder="Detail work scopes, engineering bounds, or compliance factors..."
+                        rows={2}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs resize-none bg-white"
+                      />
                     </div>
                   </div>
-
-                  {/* Predecessor link helper */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Predecessor WBS or ID (Comma-separated)</label>
-                    <input 
-                      type="text" 
-                      value={newPredecessors.join(',')} 
-                      onChange={e => setNewPredecessors(e.target.value.split(',').map(s => s.trim()).filter(Boolean))} 
-                      placeholder="e.g. WBS_1, WBS_2 or task code values"
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes / Scope details</label>
-                    <textarea 
-                      value={newNotes} 
-                      onChange={e => setNewNotes(e.target.value)} 
-                      placeholder="Detail work scopes, engineering bounds, or compliance factors..."
-                      rows={2}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs resize-none"
-                    />
-                  </div>
-
-                  {/* Subtasks Section */}
-                  <SubtasksEditor
-                    subtasks={newSubtasks}
-                    onChange={setNewSubtasks}
-                    teamMembers={teamMembers}
-                  />
-
-                  {/* Checklists Section */}
-                  <ChecklistsEditor
-                    checklists={newChecklists}
-                    onChange={setNewChecklists}
-                    teamMembers={teamMembers}
-                  />
-
-                </div>
-
-                {/* Right Column: Workflow Pipeline & Activity Communication Feed */}
-                <div className="lg:col-span-5">
-                  <TaskActivityAndWorkflow
-                    status={newStatus}
-                    onStatusChange={(stat) => {
-                      setNewStatus(stat);
-                      if (stat === 'Completed') setNewProgress(100);
-                    }}
-                    activities={newActivities}
-                    onAddActivity={(item) => setNewActivities(prev => [item, ...prev])}
-                    teamMembers={teamMembers}
-                    currentUserName="You"
-                    checklists={newChecklists}
-                    onChecklistsChange={setNewChecklists}
-                  />
-                </div>
-
-              </div>
+                }
+                status={newStatus}
+                onStatusChange={(stat) => {
+                  setNewStatus(stat);
+                  if (stat === 'Completed') setNewProgress(100);
+                }}
+                activities={newActivities}
+                onAddActivity={(item) => setNewActivities(prev => [item, ...prev])}
+                subtasks={newSubtasks}
+                onSubtasksChange={setNewSubtasks}
+                checklists={newChecklists}
+                onChecklistsChange={setNewChecklists}
+                agendas={newAgendas}
+                onAgendasChange={setNewAgendas}
+                taskTitle={newName || 'New Control Task'}
+                taskStartDate={newStart}
+                taskEndDate={newEnd}
+                accessToken={accessToken}
+                teamMembers={teamMembers}
+                currentUserName="You"
+              />
 
               <div className="flex justify-end gap-3 pt-4 mt-6 border-t border-slate-100">
                 <button 
@@ -701,220 +687,207 @@ export default function SpreadsheetGrid({
             </div>
 
             <form onSubmit={handleSaveEdit} className="p-6">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                
-                {/* Left Column: Form Parameters */}
-                <div className="lg:col-span-7 space-y-4">
-                  
-                  {isEditingParent && (
-                    <div className="bg-indigo-50 border border-indigo-100 text-indigo-900 text-[11px] p-3 rounded-xl flex items-start gap-2.5 leading-relaxed">
-                      <AlertTriangle className="h-4 w-4 text-indigo-600 flex-shrink-0 mt-0.5" />
+              <TaskActivityAndWorkflow
+                summaryContent={
+                  <div className="bg-slate-50/80 p-4 rounded-xl border border-slate-200 shadow-xs space-y-4">
+                    {isEditingParent && (
+                      <div className="bg-indigo-50 border border-indigo-100 text-indigo-900 text-[11px] p-2.5 rounded-xl flex items-start gap-2 leading-relaxed">
+                        <AlertTriangle className="h-4 w-4 text-indigo-600 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold">Summary Rollup Task (Auto-Scheduled):</span> This task is a parent WBS element. Dates, progress, and status are calculated automatically.
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div>
-                        <span className="font-bold">Summary Rollup Task (Auto-Scheduled):</span> This task is a parent WBS element. Start/end dates, duration, progress, and status are automatically calculated from its direct sub-tasks.
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">WBS Code</label>
+                        <input 
+                          type="text" 
+                          value={editingTask.wbs} 
+                          onChange={e => setEditingTask({ ...editingTask, wbs: e.target.value })} 
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono bg-white"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Task Title</label>
+                        <input 
+                          type="text" 
+                          value={editingTask.name} 
+                          onChange={e => setEditingTask({ ...editingTask, name: e.target.value })} 
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold bg-white"
+                          required
+                        />
                       </div>
                     </div>
-                  )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">WBS Code</label>
-                      <input 
-                        type="text" 
-                        value={editingTask.wbs} 
-                        onChange={e => setEditingTask({ ...editingTask, wbs: e.target.value })} 
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Task Title</label>
-                      <input 
-                        type="text" 
-                        value={editingTask.name} 
-                        onChange={e => setEditingTask({ ...editingTask, name: e.target.value })} 
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
-                      <select 
-                        value={editingTask.status === 'Not Started' ? 'To Do' : editingTask.status} 
-                        onChange={e => {
-                          const stat = e.target.value as TaskStatus;
-                          setEditingTask({ 
-                            ...editingTask, 
-                            status: stat, 
-                            progress: stat === 'Completed' ? 100 : editingTask.progress 
-                          });
-                        }}
-                        disabled={isEditingParent}
-                        className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : ''}`}
-                      >
-                        <option value="To Do">To Do</option>
-                        <option value="In Progress">In Progress</option>
-                        <option value="Completed">Completed</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center justify-between">
-                        <span>Priority</span>
-                        {editingTask.priority && (
-                          <button 
-                            type="button" 
-                            onClick={() => setEditingTask({ ...editingTask, priority: '' })}
-                            className="text-[10px] text-rose-600 hover:underline normal-case font-normal"
-                          >
-                            Clear Priority
-                          </button>
-                        )}
-                      </label>
-                      <select 
-                        value={editingTask.priority || ''} 
-                        onChange={e => setEditingTask({ ...editingTask, priority: e.target.value as TaskPriority | '' })}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs"
-                      >
-                        <option value="">-- Clear (Tanpa Priority) --</option>
-                        <option value="Urgent">🔥 Urgent</option>
-                        <option value="High">⚠️ High</option>
-                        <option value="Normal">⚡ Normal</option>
-                        <option value="Low">🌱 Low</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Progress (%)</label>
-                      <input 
-                        type="number" 
-                        min="0" max="100" 
-                        value={editingTask.progress} 
-                        onChange={e => setEditingTask({ ...editingTask, progress: Number(e.target.value) })} 
-                        disabled={isEditingParent}
-                        className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : ''}`}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Start Date</label>
-                      <input 
-                        type="date" 
-                        value={editingTask.startDate} 
-                        onChange={e => setEditingTask({ ...editingTask, startDate: e.target.value })} 
-                        disabled={isEditingParent}
-                        className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : ''}`}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">End Date</label>
-                      <input 
-                        type="date" 
-                        value={editingTask.endDate} 
-                        onChange={e => setEditingTask({ ...editingTask, endDate: e.target.value })} 
-                        disabled={isEditingParent}
-                        className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : ''}`}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Assignees edit stack */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 flex items-center gap-1">
-                      <UserPlus className="h-3.5 w-3.5" />
-                      Assign Team Resources
-                    </label>
-                    <div className="flex flex-wrap gap-2 p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                      {teamMembers.length === 0 ? (
-                        <span className="text-[10px] text-slate-400">No team members registered.</span>
-                      ) : (
-                        teamMembers.map(m => {
-                          const isAssigned = (editingTask.assignees || []).includes(m.email);
-                          return (
-                            <div 
-                              key={m.email}
-                              onClick={() => toggleAssignee(m.email, true)}
-                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-2 cursor-pointer transition-all ${
-                                isAssigned 
-                                  ? 'bg-slate-900 border-slate-900 text-white shadow-xs' 
-                                  : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
-                              }`}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Status</label>
+                        <select 
+                          value={editingTask.status === 'Not Started' ? 'To Do' : editingTask.status} 
+                          onChange={e => {
+                            const stat = e.target.value as TaskStatus;
+                            setEditingTask({ 
+                              ...editingTask, 
+                              status: stat, 
+                              progress: stat === 'Completed' ? 100 : editingTask.progress 
+                            });
+                          }}
+                          disabled={isEditingParent}
+                          className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : 'bg-white'}`}
+                        >
+                          <option value="To Do">To Do</option>
+                          <option value="In Progress">In Progress</option>
+                          <option value="Completed">Completed</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center justify-between">
+                          <span>Priority</span>
+                          {editingTask.priority && (
+                            <button 
+                              type="button" 
+                              onClick={() => setEditingTask({ ...editingTask, priority: '' })}
+                              className="text-[10px] text-rose-600 hover:underline normal-case font-normal"
                             >
-                              <img src={m.avatarUrl} alt={m.name} className="h-4 w-4 rounded-full" />
-                              <span className="text-[10px] font-semibold">{m.name}</span>
-                            </div>
-                          );
-                        })
-                      )}
+                              Clear Priority
+                            </button>
+                          )}
+                        </label>
+                        <select 
+                          value={editingTask.priority || ''} 
+                          onChange={e => setEditingTask({ ...editingTask, priority: e.target.value as TaskPriority | '' })}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white"
+                        >
+                          <option value="">-- Clear (Tanpa Priority) --</option>
+                          <option value="Urgent">🔥 Urgent</option>
+                          <option value="High">⚠️ High</option>
+                          <option value="Normal">⚡ Normal</option>
+                          <option value="Low">🌱 Low</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Progress (%)</label>
+                        <input 
+                          type="number" 
+                          min="0" max="100" 
+                          value={editingTask.progress} 
+                          onChange={e => setEditingTask({ ...editingTask, progress: Number(e.target.value) })} 
+                          disabled={isEditingParent}
+                          className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : 'bg-white'}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Start Date</label>
+                        <input 
+                          type="date" 
+                          value={editingTask.startDate} 
+                          onChange={e => setEditingTask({ ...editingTask, startDate: e.target.value })} 
+                          disabled={isEditingParent}
+                          className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : 'bg-white'}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">End Date</label>
+                        <input 
+                          type="date" 
+                          value={editingTask.endDate} 
+                          onChange={e => setEditingTask({ ...editingTask, endDate: e.target.value })} 
+                          disabled={isEditingParent}
+                          className={`w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono ${isEditingParent ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : 'bg-white'}`}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5 flex items-center gap-1">
+                        <UserPlus className="h-3.5 w-3.5" />
+                        Assign Team Resources
+                      </label>
+                      <div className="flex flex-wrap gap-2 p-2.5 bg-white border border-slate-200/80 rounded-xl">
+                        {teamMembers.length === 0 ? (
+                          <span className="text-[10px] text-slate-400">No team members registered.</span>
+                        ) : (
+                          teamMembers.map(m => {
+                            const isAssigned = (editingTask.assignees || []).includes(m.email);
+                            return (
+                              <div 
+                                key={m.email}
+                                onClick={() => toggleAssignee(m.email, true)}
+                                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border-2 cursor-pointer transition-all ${
+                                  isAssigned 
+                                    ? 'bg-slate-900 border-slate-900 text-white shadow-xs' 
+                                    : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                                }`}
+                              >
+                                <img src={m.avatarUrl} alt={m.name} className="h-4 w-4 rounded-full" />
+                                <span className="text-[10px] font-semibold">{m.name}</span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Predecessor WBS or ID</label>
+                      <input 
+                        type="text" 
+                        value={editingTask.predecessors.join(',')} 
+                        onChange={e => setEditingTask({ ...editingTask, predecessors: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} 
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes / Scope details</label>
+                      <textarea 
+                        value={editingTask.notes} 
+                        onChange={e => setEditingTask({ ...editingTask, notes: e.target.value })} 
+                        rows={2}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs resize-none bg-white"
+                      />
                     </div>
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Predecessor WBS or ID (Comma-separated)</label>
-                    <input 
-                      type="text" 
-                      value={editingTask.predecessors.join(',')} 
-                      onChange={e => setEditingTask({ ...editingTask, predecessors: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} 
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Notes / Scope details</label>
-                    <textarea 
-                      value={editingTask.notes} 
-                      onChange={e => setEditingTask({ ...editingTask, notes: e.target.value })} 
-                      rows={2}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs resize-none"
-                    />
-                  </div>
-
-                  {/* Subtasks Section */}
-                  <SubtasksEditor
-                    subtasks={editingTask.subtasks || []}
-                    onChange={subs => setEditingTask({ ...editingTask, subtasks: subs })}
-                    teamMembers={teamMembers}
-                  />
-
-                  {/* Checklists Section */}
-                  <ChecklistsEditor
-                    checklists={editingTask.checklists || []}
-                    onChange={cls => setEditingTask({ ...editingTask, checklists: cls })}
-                    teamMembers={teamMembers}
-                  />
-
-                </div>
-
-                {/* Right Column: Workflow Pipeline & Activity Feed */}
-                <div className="lg:col-span-5">
-                  <TaskActivityAndWorkflow
-                    status={editingTask.status}
-                    onStatusChange={(stat) => setEditingTask({
-                      ...editingTask,
-                      status: stat,
-                      progress: stat === 'Completed' ? 100 : editingTask.progress
-                    })}
-                    activities={editingTask.activities || []}
-                    onAddActivity={(item) => setEditingTask({
-                      ...editingTask,
-                      activities: [item, ...(editingTask.activities || [])]
-                    })}
-                    checklists={editingTask.checklists || []}
-                    onChecklistsChange={(cls) => setEditingTask({
-                      ...editingTask,
-                      checklists: cls
-                    })}
-                    teamMembers={teamMembers}
-                    currentUserName="You"
-                  />
-                </div>
-
-              </div>
+                }
+                status={editingTask.status}
+                onStatusChange={(stat) => setEditingTask({
+                  ...editingTask,
+                  status: stat,
+                  progress: stat === 'Completed' ? 100 : editingTask.progress
+                })}
+                activities={editingTask.activities || []}
+                onAddActivity={(item) => setEditingTask({
+                  ...editingTask,
+                  activities: [item, ...(editingTask.activities || [])]
+                })}
+                subtasks={editingTask.subtasks || []}
+                onSubtasksChange={(subs) => setEditingTask({
+                  ...editingTask,
+                  subtasks: subs
+                })}
+                checklists={editingTask.checklists || []}
+                onChecklistsChange={(cls) => setEditingTask({
+                  ...editingTask,
+                  checklists: cls
+                })}
+                agendas={editingTask.agendas || []}
+                onAgendasChange={(ags) => setEditingTask({
+                  ...editingTask,
+                  agendas: ags
+                })}
+                taskTitle={editingTask.name}
+                taskStartDate={editingTask.startDate}
+                taskEndDate={editingTask.endDate}
+                accessToken={accessToken}
+                teamMembers={teamMembers}
+                currentUserName="You"
+              />
 
               <div className="flex justify-end gap-3 pt-4 mt-6 border-t border-slate-100">
                 <button 
