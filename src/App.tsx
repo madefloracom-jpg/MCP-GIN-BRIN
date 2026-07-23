@@ -14,7 +14,8 @@ import {
 import { 
   fetchProjectData, 
   saveProjectData,
-  shareFileWithAnyone
+  shareFileWithAnyone,
+  initializeSpreadsheet
 } from './lib/googleApi';
 import { 
   Task, 
@@ -114,6 +115,31 @@ export default function App() {
 
     if (savedProjectName) setProjectName(savedProjectName);
 
+    // Initial load from local storage cache so user input (including priority, subtasks, etc.) is instantly available
+    const cachedDataStr = localStorage.getItem('mcp_latest_cached_data') || localStorage.getItem(`mcp_cache_${activeSheetId}`);
+    if (cachedDataStr) {
+      try {
+        const cached = JSON.parse(cachedDataStr);
+        if (cached.tasks && Array.isArray(cached.tasks) && cached.tasks.length > 0) {
+          setTasks(applyWbsRollups(cached.tasks));
+        }
+        if (cached.milestones && Array.isArray(cached.milestones)) {
+          setMilestones(cached.milestones);
+        }
+        if (cached.teamMembers && Array.isArray(cached.teamMembers)) {
+          setTeamMembers(cached.teamMembers);
+        }
+        if (cached.risks && Array.isArray(cached.risks)) {
+          setRisks(cached.risks);
+        }
+        if (cached.logs && Array.isArray(cached.logs)) {
+          setLogs(cached.logs);
+        }
+      } catch (e) {
+        console.error('Error reading initial local cache:', e);
+      }
+    }
+
     // Initialize Firebase Auth listener
     initAuth(
       (currentUser, token) => {
@@ -164,7 +190,42 @@ export default function App() {
     setIsLoadingData(true);
     try {
       const data = await fetchProjectData(token, sheetId);
-      setTasks(applyWbsRollups(data.tasks));
+
+      // Merge remote data with local cache if available so local inputs (priority, subtasks, checklists, new local tasks) are preserved
+      const cacheKey = `mcp_cache_${sheetId}`;
+      const cachedStr = localStorage.getItem(cacheKey) || localStorage.getItem('mcp_latest_cached_data');
+      let effectiveTasks = data.tasks;
+
+      if (cachedStr) {
+        try {
+          const cached = JSON.parse(cachedStr);
+          if (cached.tasks && Array.isArray(cached.tasks) && cached.tasks.length > 0) {
+            const remoteMap = new Map(data.tasks.map(t => [t.id, t]));
+            const merged = cached.tasks.map((lt: Task) => {
+              const rt = remoteMap.get(lt.id);
+              if (!rt) return lt; // newly added task locally
+              return {
+                ...rt,
+                priority: (lt.priority && !rt.priority) ? lt.priority : (lt.priority || rt.priority || ''),
+                subtasks: (lt.subtasks && lt.subtasks.length > 0) ? lt.subtasks : rt.subtasks,
+                checklists: (lt.checklists && lt.checklists.length > 0) ? lt.checklists : rt.checklists,
+                activities: (lt.activities && lt.activities.length > 0) ? lt.activities : rt.activities,
+                agendas: (lt.agendas && lt.agendas.length > 0) ? lt.agendas : rt.agendas,
+              };
+            });
+            // Add remote tasks that weren't in local cache
+            const localIds = new Set(cached.tasks.map((lt: Task) => lt.id));
+            data.tasks.forEach(rt => {
+              if (!localIds.has(rt.id)) merged.push(rt);
+            });
+            effectiveTasks = merged;
+          }
+        } catch (e) {
+          console.error('Error merging local cache:', e);
+        }
+      }
+
+      setTasks(applyWbsRollups(effectiveTasks));
       setMilestones(data.milestones);
       
       let effectiveTeam = data.teamMembers || [];
@@ -185,8 +246,38 @@ export default function App() {
       setLogs(data.logs);
       setConfig(data.config);
       setLastSyncTime(new Date().toLocaleTimeString());
+
+      // Save merged state back to cache
+      const updatedCache = {
+        tasks: effectiveTasks,
+        milestones: data.milestones,
+        teamMembers: effectiveTeam,
+        risks: data.risks,
+        logs: data.logs,
+        timestamp: new Date().toISOString()
+      };
+      localStorage.setItem(`mcp_cache_${sheetId}`, JSON.stringify(updatedCache));
+      localStorage.setItem('mcp_latest_cached_data', JSON.stringify(updatedCache));
     } catch (err: any) {
       console.error('Failed to load database values:', err);
+
+      // Load local cache fallback
+      const cacheKey = `mcp_cache_${sheetId}`;
+      const cachedStr = localStorage.getItem(cacheKey) || localStorage.getItem('mcp_latest_cached_data');
+      if (cachedStr) {
+        try {
+          const cached = JSON.parse(cachedStr);
+          if (cached.tasks) setTasks(applyWbsRollups(cached.tasks));
+          if (cached.milestones) setMilestones(cached.milestones);
+          if (cached.teamMembers) setTeamMembers(cached.teamMembers);
+          if (cached.risks) setRisks(cached.risks);
+          if (cached.logs) setLogs(cached.logs);
+          console.log('Loaded data from local cache fallback successfully');
+        } catch (e) {
+          console.error('Failed to parse fallback cache:', e);
+        }
+      }
+
       const errMsg = err.message || String(err);
       const isDriveDisabled = errMsg.includes('drive.googleapis.com') || errMsg.includes('Google Drive API') || errMsg.includes('Drive API');
       const isSheetsDisabled = errMsg.includes('sheets.googleapis.com') || errMsg.includes('Google Sheets API') || errMsg.includes('Sheets API');
@@ -212,15 +303,13 @@ export default function App() {
       } else if (isPermissionDenied) {
         setConfirmState({
           isOpen: true,
-          title: 'Izin Akses Google Sheet Ditolak',
-          message: `Akun Google Anda (${user?.email || 'saat ini'}) belum memiliki izin akses ke Spreadsheet Google Drive ini.\n\nLangkah Penyelesaian:\n1. Minta Pemilik Proyek / Pembuat Sheet untuk membagikan file Google Sheet di Drive ke email Anda (${user?.email}) dengan peran Editor.\n2. Atau minta pemilik membuka aplikasi ini dan klik "Bagikan Link & Akses Proyek" di menu samping.\n3. Klik "Buka Google Sheet" untuk meminta akses langsung ke pemilik file.`,
+          title: 'Izin Akses Google Sheet Ditolak (403)',
+          message: `Akun Google Anda (${user?.email || 'saat ini'}) belum memiliki izin akses ke Spreadsheet ini.\n\nSistem menggunakan data tersimpan lokal di browser Anda agar tugas & priority tidak hilang.`,
           onConfirm: () => {
             window.open(`https://docs.google.com/spreadsheets/d/${sheetId}`, '_blank');
             setConfirmState(prev => ({ ...prev, isOpen: false }));
           }
         });
-      } else {
-        alert(`Gagal Membaca Database Google Sheet: ${errMsg}`);
       }
     } finally {
       setIsLoadingData(false);
@@ -304,7 +393,22 @@ export default function App() {
     updatedRisks: Risk[],
     updatedLogs: ActivityLog[]
   ) => {
+    // 1. Immediately cache in local storage so user input (priority, tasks, risks) is NEVER lost!
+    const cacheData = {
+      tasks: updatedTasks,
+      milestones: updatedMilestones,
+      teamMembers: updatedTeam,
+      risks: updatedRisks,
+      logs: updatedLogs,
+      timestamp: new Date().toISOString()
+    };
+    if (spreadsheetId) {
+      localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
+    }
+    localStorage.setItem('mcp_latest_cached_data', JSON.stringify(cacheData));
+
     if (!accessToken || !spreadsheetId) return;
+
     setIsSyncing(true);
     try {
       await saveProjectData(accessToken, spreadsheetId, {
@@ -317,7 +421,48 @@ export default function App() {
       setLastSyncTime(new Date().toLocaleTimeString());
     } catch (err: any) {
       console.error('Database Sync Failed:', err);
-      alert(`Peringatan Simpan Database: Gagal menyimpan data ke Google Sheet.\n\nError: ${err.message || String(err)}`);
+      const errMsg = err.message || String(err);
+      const is403 = errMsg.includes('403') || errMsg.includes('permission') || errMsg.includes('Permission') || errMsg.includes('does not have permission');
+
+      if (is403 && accessToken) {
+        try {
+          console.log('403 Permission Denied on current sheet. Auto-creating personal Google Sheet in user Drive...');
+          const newSheet = await initializeSpreadsheet(
+            accessToken,
+            projectName || 'Master Control Plan',
+            'Master Control Plan Project Database',
+            folderId || DEFAULT_DRIVE_FOLDER_ID
+          );
+
+          const newSheetId = newSheet.spreadsheetId;
+          setSpreadsheetId(newSheetId);
+          localStorage.setItem('mcp_spreadsheet_id', newSheetId);
+          localStorage.setItem(`mcp_cache_${newSheetId}`, JSON.stringify(cacheData));
+
+          // Save to newly created sheet
+          await saveProjectData(accessToken, newSheetId, {
+            tasks: updatedTasks,
+            milestones: updatedMilestones,
+            teamMembers: updatedTeam,
+            risks: updatedRisks,
+            logs: updatedLogs
+          });
+
+          setLastSyncTime(new Date().toLocaleTimeString());
+
+          setConfirmState({
+            isOpen: true,
+            title: 'Google Sheet Pribadi Otomatis Dibuat',
+            message: `Spreadsheet sebelumnya bersifat Read-Only atau tidak memiliki izin akses (403 Permission Denied).\n\nAplikasi telah otomatis membuat file Google Sheet baru di Google Drive Anda:\n- Title: Master Control Plan (MCP) - ${projectName || 'BRIN'}\n- ID: ${newSheetId}\n\nSeluruh data Task, Priority, Risk, dan Tim Anda telah tersimpan dengan aman ke Google Drive pribadi Anda!`,
+            onConfirm: () => setConfirmState(prev => ({ ...prev, isOpen: false }))
+          });
+          return;
+        } catch (createErr: any) {
+          console.error('Failed to auto-create personal sheet:', createErr);
+        }
+      }
+
+      console.warn('Data is saved in local browser storage. Google Sheets sync notice:', errMsg);
     } finally {
       setIsSyncing(false);
     }
