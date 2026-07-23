@@ -59,7 +59,7 @@ export default function SetupWizard({ accessToken, onProjectConnected, onCancel 
   const [existingProjects, setExistingProjects] = useState<Array<{ id: string; name: string; createdTime: string; modifiedTime?: string }>>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSheetId, setSelectedSheetId] = useState<string | null>(null);
-  const DEFAULT_SPREADSHEET_ID = '1HKqMhFXy2cE0xgUQsBzKNwzUgwsEL9mupVctKseQGnU';
+  const DEFAULT_SPREADSHEET_ID = '1iFn-cbiI4Jn6Ly3A7hTYOV3_a3G4HJOv-_1X8izbmr8';
   const DEFAULT_DRIVE_FOLDER_ID = '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
   const [manualUrlOrId, setManualUrlOrId] = useState(DEFAULT_SPREADSHEET_ID);
   const [connectError, setConnectError] = useState<any>(null);

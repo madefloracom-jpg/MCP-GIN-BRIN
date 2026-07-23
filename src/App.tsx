@@ -104,7 +104,7 @@ export default function App() {
   });
 
   // Default Master Control Plan Google Sheet ID & Drive Folder ID
-  const DEFAULT_SPREADSHEET_ID = '1HKqMhFXy2cE0xgUQsBzKNwzUgwsEL9mupVctKseQGnU';
+  const DEFAULT_SPREADSHEET_ID = '1iFn-cbiI4Jn6Ly3A7hTYOV3_a3G4HJOv-_1X8izbmr8';
   const DEFAULT_DRIVE_FOLDER_ID = '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
 
   // Load project configuration from local storage or URL search params on load
@@ -199,18 +199,18 @@ export default function App() {
     try {
       const data = await fetchProjectData(token, sheetId);
 
-      // Merge remote data with local cache if available so local inputs (priority, subtasks, checklists) are preserved
+      // Load remote data strictly from Google Sheets
       const cacheKey = `mcp_cache_${sheetId}`;
       const cachedStr = localStorage.getItem(cacheKey);
-      let effectiveTasks = data.tasks;
+      let effectiveTasks = data.tasks || [];
 
-      if (data.tasks && data.tasks.length > 0) {
+      if (effectiveTasks.length > 0) {
         if (cachedStr) {
           try {
             const cached = JSON.parse(cachedStr);
             if (cached.tasks && Array.isArray(cached.tasks)) {
               const localMap = new Map<string, Task>(cached.tasks.map((t: Task) => [t.id, t]));
-              effectiveTasks = data.tasks.map((rt: Task) => {
+              effectiveTasks = effectiveTasks.map((rt: Task) => {
                 const lt = localMap.get(rt.id);
                 if (!lt) return rt;
                 return {
@@ -232,39 +232,47 @@ export default function App() {
           const cached = JSON.parse(cachedStr);
           if (cached.tasks && Array.isArray(cached.tasks) && cached.tasks.length > 0) {
             effectiveTasks = cached.tasks;
+          } else {
+            effectiveTasks = [...INITIAL_BRIN_TASKS];
           }
-        } catch (e) {}
+        } catch (e) {
+          effectiveTasks = [...INITIAL_BRIN_TASKS];
+        }
+      } else {
+        effectiveTasks = [...INITIAL_BRIN_TASKS];
       }
+
+      // Milestones, Team, Risks, Logs strictly from Sheet or fallbacks
+      let effectiveMilestones = (data.milestones && data.milestones.length > 0) ? data.milestones : INITIAL_BRIN_MILESTONES;
+      
+      let effectiveTeam = (data.teamMembers && data.teamMembers.length > 0) ? data.teamMembers : [...INITIAL_BRIN_TEAM];
+      if (user?.email && !effectiveTeam.some(m => m.email === user.email)) {
+        effectiveTeam.unshift({
+          email: user.email,
+          name: user.displayName || user.email.split('@')[0],
+          role: 'Project Lead',
+          avatarUrl: user.photoURL || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}`
+        });
+      }
+
+      let effectiveRisks = (data.risks && data.risks.length > 0) ? data.risks : INITIAL_BRIN_RISKS;
+      let effectiveLogs = (data.logs && data.logs.length > 0) ? data.logs : INITIAL_BRIN_LOGS;
 
       setTasks(applyWbsRollups(effectiveTasks));
-      setMilestones(data.milestones);
-      
-      let effectiveTeam = data.teamMembers || [];
-      if (user?.email && !effectiveTeam.some(m => m.email === user.email)) {
-        effectiveTeam = [
-          {
-            email: user.email,
-            name: user.displayName || user.email.split('@')[0],
-            role: 'Project Lead',
-            avatarUrl: user.photoURL || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}`
-          },
-          ...effectiveTeam
-        ];
-      }
+      setMilestones(effectiveMilestones);
       setTeamMembers(effectiveTeam);
-      
-      setRisks(data.risks);
-      setLogs(data.logs);
-      setConfig(data.config);
+      setRisks(effectiveRisks);
+      setLogs(effectiveLogs);
+      setConfig(data.config || {});
       setLastSyncTime(new Date().toLocaleTimeString());
 
-      // Save merged state back to cache for this specific sheet
+      // Save state back to cache for this specific sheet
       const updatedCache = {
         tasks: effectiveTasks,
-        milestones: data.milestones,
+        milestones: effectiveMilestones,
         teamMembers: effectiveTeam,
-        risks: data.risks,
-        logs: data.logs,
+        risks: effectiveRisks,
+        logs: effectiveLogs,
         timestamp: new Date().toISOString()
       };
       localStorage.setItem(`mcp_cache_${sheetId}`, JSON.stringify(updatedCache));
