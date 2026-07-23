@@ -123,8 +123,8 @@ export default function App() {
 
     if (savedProjectName) setProjectName(savedProjectName);
 
-    // Initial load from local storage cache so user input (including priority, subtasks, etc.) is instantly available
-    const cachedDataStr = localStorage.getItem('mcp_latest_cached_data') || localStorage.getItem(`mcp_cache_${activeSheetId}`);
+    // Initial load from local storage cache for activeSheetId
+    const cachedDataStr = localStorage.getItem(`mcp_cache_${activeSheetId}`);
     if (cachedDataStr) {
       try {
         const cached = JSON.parse(cachedDataStr);
@@ -199,38 +199,41 @@ export default function App() {
     try {
       const data = await fetchProjectData(token, sheetId);
 
-      // Merge remote data with local cache if available so local inputs (priority, subtasks, checklists, new local tasks) are preserved
+      // Merge remote data with local cache if available so local inputs (priority, subtasks, checklists) are preserved
       const cacheKey = `mcp_cache_${sheetId}`;
-      const cachedStr = localStorage.getItem(cacheKey) || localStorage.getItem('mcp_latest_cached_data');
+      const cachedStr = localStorage.getItem(cacheKey);
       let effectiveTasks = data.tasks;
 
-      if (cachedStr) {
+      if (data.tasks && data.tasks.length > 0) {
+        if (cachedStr) {
+          try {
+            const cached = JSON.parse(cachedStr);
+            if (cached.tasks && Array.isArray(cached.tasks)) {
+              const localMap = new Map<string, Task>(cached.tasks.map((t: Task) => [t.id, t]));
+              effectiveTasks = data.tasks.map((rt: Task) => {
+                const lt = localMap.get(rt.id);
+                if (!lt) return rt;
+                return {
+                  ...rt,
+                  priority: (rt.priority || lt.priority || 'Normal'),
+                  subtasks: (rt.subtasks && rt.subtasks.length > 0) ? rt.subtasks : (lt.subtasks || []),
+                  checklists: (rt.checklists && rt.checklists.length > 0) ? rt.checklists : (lt.checklists || []),
+                  activities: (rt.activities && rt.activities.length > 0) ? rt.activities : (lt.activities || []),
+                  agendas: (rt.agendas && rt.agendas.length > 0) ? rt.agendas : (lt.agendas || []),
+                };
+              });
+            }
+          } catch (e) {
+            console.error('Error merging local cache:', e);
+          }
+        }
+      } else if (cachedStr) {
         try {
           const cached = JSON.parse(cachedStr);
           if (cached.tasks && Array.isArray(cached.tasks) && cached.tasks.length > 0) {
-            const remoteMap = new Map(data.tasks.map(t => [t.id, t]));
-            const merged = cached.tasks.map((lt: Task) => {
-              const rt = remoteMap.get(lt.id);
-              if (!rt) return lt; // newly added task locally
-              return {
-                ...rt,
-                priority: (lt.priority && !rt.priority) ? lt.priority : (lt.priority || rt.priority || ''),
-                subtasks: (lt.subtasks && lt.subtasks.length > 0) ? lt.subtasks : rt.subtasks,
-                checklists: (lt.checklists && lt.checklists.length > 0) ? lt.checklists : rt.checklists,
-                activities: (lt.activities && lt.activities.length > 0) ? lt.activities : rt.activities,
-                agendas: (lt.agendas && lt.agendas.length > 0) ? lt.agendas : rt.agendas,
-              };
-            });
-            // Add remote tasks that weren't in local cache
-            const localIds = new Set(cached.tasks.map((lt: Task) => lt.id));
-            data.tasks.forEach(rt => {
-              if (!localIds.has(rt.id)) merged.push(rt);
-            });
-            effectiveTasks = merged;
+            effectiveTasks = cached.tasks;
           }
-        } catch (e) {
-          console.error('Error merging local cache:', e);
-        }
+        } catch (e) {}
       }
 
       setTasks(applyWbsRollups(effectiveTasks));
@@ -255,7 +258,7 @@ export default function App() {
       setConfig(data.config);
       setLastSyncTime(new Date().toLocaleTimeString());
 
-      // Save merged state back to cache
+      // Save merged state back to cache for this specific sheet
       const updatedCache = {
         tasks: effectiveTasks,
         milestones: data.milestones,
@@ -265,13 +268,12 @@ export default function App() {
         timestamp: new Date().toISOString()
       };
       localStorage.setItem(`mcp_cache_${sheetId}`, JSON.stringify(updatedCache));
-      localStorage.setItem('mcp_latest_cached_data', JSON.stringify(updatedCache));
     } catch (err: any) {
       console.error('Failed to load database values:', err);
 
       // Load local cache fallback
       const cacheKey = `mcp_cache_${sheetId}`;
-      const cachedStr = localStorage.getItem(cacheKey) || localStorage.getItem('mcp_latest_cached_data');
+      const cachedStr = localStorage.getItem(cacheKey);
       if (cachedStr) {
         try {
           const cached = JSON.parse(cachedStr);
@@ -413,7 +415,6 @@ export default function App() {
     if (spreadsheetId) {
       localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
     }
-    localStorage.setItem('mcp_latest_cached_data', JSON.stringify(cacheData));
 
     if (!accessToken || !spreadsheetId) return;
 
