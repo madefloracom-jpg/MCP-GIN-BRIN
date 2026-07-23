@@ -243,6 +243,12 @@ export default function App() {
         setUser(result.user);
         setAccessToken(result.accessToken);
         setNeedsAuth(false);
+        const activeSheetId = localStorage.getItem('mcp_spreadsheet_id') || DEFAULT_SPREADSHEET_ID;
+        const activeFolderId = localStorage.getItem('mcp_folder_id') || DEFAULT_DRIVE_FOLDER_ID;
+        const savedProjectName = localStorage.getItem('mcp_project_name') || 'BRIN Master Control Plan';
+        setSpreadsheetId(activeSheetId);
+        setFolderId(activeFolderId);
+        setProjectName(savedProjectName);
       }
     } catch (err: any) {
       const errMsg = err.message || String(err);
@@ -286,12 +292,8 @@ export default function App() {
     setUser(null);
     setAccessToken(null);
     setNeedsAuth(true);
-    setSpreadsheetId(null);
-    setFolderId(null);
-    setProjectName('');
-    localStorage.removeItem('mcp_spreadsheet_id');
-    localStorage.removeItem('mcp_folder_id');
-    localStorage.removeItem('mcp_project_name');
+    // Keep spreadsheetId, folderId, and projectName intact in state & localStorage
+    // so that when user logs back in, they connect back to their project database seamlessly.
   };
 
   // Save changes to Google Sheets database
@@ -315,6 +317,7 @@ export default function App() {
       setLastSyncTime(new Date().toLocaleTimeString());
     } catch (err: any) {
       console.error('Database Sync Failed:', err);
+      alert(`Peringatan Simpan Database: Gagal menyimpan data ke Google Sheet.\n\nError: ${err.message || String(err)}`);
     } finally {
       setIsSyncing(false);
     }
@@ -673,6 +676,12 @@ export default function App() {
                     setAccessToken(manualTokenInput.trim());
                     setCachedAccessToken(manualTokenInput.trim());
                     setNeedsAuth(false);
+                    const activeSheetId = localStorage.getItem('mcp_spreadsheet_id') || DEFAULT_SPREADSHEET_ID;
+                    const activeFolderId = localStorage.getItem('mcp_folder_id') || DEFAULT_DRIVE_FOLDER_ID;
+                    const savedProjectName = localStorage.getItem('mcp_project_name') || 'BRIN Master Control Plan';
+                    setSpreadsheetId(activeSheetId);
+                    setFolderId(activeFolderId);
+                    setProjectName(savedProjectName);
                   }}
                   disabled={!manualTokenInput.trim()}
                   className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition-all shadow-md"

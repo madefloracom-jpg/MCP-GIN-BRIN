@@ -233,7 +233,7 @@ export async function initializeSpreadsheet(
 
   const taskHeaders = [[
     'ID', 'WBS', 'Task Name', 'Status', 'Progress (%)', 'Start Date', 'End Date', 
-    'Duration (Days)', 'Assignees', 'Predecessors', 'Budget', 'Actual Cost', 'Risk Level', 'Notes', 'Attachment URL', 'Priority', 'Subtasks', 'Checklists'
+    'Duration (Days)', 'Assignees', 'Predecessors', 'Budget', 'Actual Cost', 'Risk Level', 'Notes', 'Attachment URL', 'Priority', 'Subtasks', 'Checklists', 'Activities', 'Agendas'
   ]];
 
   const milestoneHeaders = [[
@@ -284,7 +284,7 @@ export async function initializeSpreadsheet(
           startRowIndex: 0,
           endRowIndex: 1,
           startColumnIndex: 0,
-          endColumnIndex: sheetName === SHEETS.TASKS ? 18 : sheetName === SHEETS.MILESTONES ? 5 : sheetName === SHEETS.RISKS ? 6 : 4
+          endColumnIndex: sheetName === SHEETS.TASKS ? 20 : sheetName === SHEETS.MILESTONES ? 5 : sheetName === SHEETS.RISKS ? 6 : 4
         },
         cell: {
           userEnteredFormat: {
@@ -408,7 +408,7 @@ export async function fetchProjectData(accessToken: string, spreadsheetId: strin
   logs: ActivityLog[];
 }> {
   const configRange = `'${SHEETS.CONFIG}'!A:B`;
-  const tasksRange = `'${SHEETS.TASKS}'!A:R`;
+  const tasksRange = `'${SHEETS.TASKS}'!A:T`;
   const milestonesRange = `'${SHEETS.MILESTONES}'!A:E`;
   const teamRange = `'${SHEETS.TEAM}'!A:D`;
   const risksRange = `'${SHEETS.RISKS}'!A:F`;
@@ -492,6 +492,20 @@ export async function fetchProjectData(accessToken: string, spreadsheetId: strin
       checklists: (() => {
         try {
           return row[17] ? JSON.parse(row[17]) : [];
+        } catch {
+          return [];
+        }
+      })(),
+      activities: (() => {
+        try {
+          return row[18] ? JSON.parse(row[18]) : [];
+        } catch {
+          return [];
+        }
+      })(),
+      agendas: (() => {
+        try {
+          return row[19] ? JSON.parse(row[19]) : [];
         } catch {
           return [];
         }
@@ -594,7 +608,9 @@ export async function saveProjectData(
     t.attachmentUrl,
     t.priority || '',
     JSON.stringify(t.subtasks || []),
-    JSON.stringify(t.checklists || [])
+    JSON.stringify(t.checklists || []),
+    JSON.stringify(t.activities || []),
+    JSON.stringify(t.agendas || [])
   ]);
 
   // Format Milestones rows
@@ -636,7 +652,7 @@ export async function saveProjectData(
 
   // Clear older values starting from row 2 up to column index 15 and row index 1500 to keep it clean
   await Promise.all([
-    clearSheetValues(accessToken, spreadsheetId, `'${SHEETS.TASKS}'!A2:R1500`),
+    clearSheetValues(accessToken, spreadsheetId, `'${SHEETS.TASKS}'!A2:T1500`),
     clearSheetValues(accessToken, spreadsheetId, `'${SHEETS.MILESTONES}'!A2:E500`),
     clearSheetValues(accessToken, spreadsheetId, `'${SHEETS.TEAM}'!A2:D200`),
     clearSheetValues(accessToken, spreadsheetId, `'${SHEETS.RISKS}'!A2:F500`),
