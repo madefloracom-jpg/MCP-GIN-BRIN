@@ -43,8 +43,32 @@ provider.addScope('https://www.googleapis.com/auth/calendar.events');
 provider.addScope('https://www.googleapis.com/auth/userinfo.email');
 provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
 
+const TOKEN_STORAGE_KEY = 'mcp_cached_access_token';
+
+const getStoredAccessToken = (): string | null => {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY) || sessionStorage.getItem(TOKEN_STORAGE_KEY) || null;
+  } catch {
+    return null;
+  }
+};
+
+const storeAccessToken = (token: string | null) => {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+      sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.error('Error storing access token:', e);
+  }
+};
+
 let isSigningIn = false;
-let cachedAccessToken: string | null = null;
+let cachedAccessToken: string | null = getStoredAccessToken();
 
 // Auth state initialization listener
 export const initAuth = (
@@ -53,15 +77,17 @@ export const initAuth = (
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+      const activeToken = cachedAccessToken || getStoredAccessToken();
+      if (activeToken) {
+        cachedAccessToken = activeToken;
+        if (onAuthSuccess) onAuthSuccess(user, activeToken);
       } else {
-        // If we have a user but no in-memory token, we need them to re-sign in to get a fresh token.
-        // Or we can try to re-authenticate or just signal that we need a login to fetch a fresh token.
-        if (onAuthFailure) onAuthFailure();
+        // User logged in via Firebase without OAuth scope token saved
+        if (onAuthSuccess) onAuthSuccess(user, '');
       }
     } else {
       cachedAccessToken = null;
+      storeAccessToken(null);
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -78,6 +104,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
 
     cachedAccessToken = credential.accessToken;
+    storeAccessToken(cachedAccessToken);
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Google Sign-In Error:', error);
@@ -89,16 +116,18 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 
 // Retrieve current cached token
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  return cachedAccessToken || getStoredAccessToken();
 };
 
 // Set cached token manually (if retrieved from login flow elsewhere)
 export const setCachedAccessToken = (token: string | null) => {
   cachedAccessToken = token;
+  storeAccessToken(token);
 };
 
 // Sign Out
 export const logout = async () => {
   await signOut(auth);
   cachedAccessToken = null;
+  storeAccessToken(null);
 };

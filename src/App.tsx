@@ -50,6 +50,14 @@ import GanttChart from './components/GanttChart';
 import RiskMatrix from './components/RiskMatrix';
 import DocumentManager from './components/DocumentManager';
 
+import { 
+  INITIAL_BRIN_TASKS,
+  INITIAL_BRIN_MILESTONES,
+  INITIAL_BRIN_TEAM,
+  INITIAL_BRIN_RISKS,
+  INITIAL_BRIN_LOGS
+} from './data/defaultData';
+
 export default function App() {
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -62,13 +70,13 @@ export default function App() {
   // Control Plan Database state
   const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [folderId, setFolderId] = useState<string | null>(null);
-  const [projectName, setProjectName] = useState<string>('');
+  const [projectName, setProjectName] = useState<string>('BRIN Master Control Plan');
 
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [milestones, setMilestones] = useState<Milestone[]>([]);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const [risks, setRisks] = useState<Risk[]>([]);
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
+  const [tasks, setTasks] = useState<Task[]>(applyWbsRollups(INITIAL_BRIN_TASKS));
+  const [milestones, setMilestones] = useState<Milestone[]>(INITIAL_BRIN_MILESTONES);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(INITIAL_BRIN_TEAM);
+  const [risks, setRisks] = useState<Risk[]>(INITIAL_BRIN_RISKS);
+  const [logs, setLogs] = useState<ActivityLog[]>(INITIAL_BRIN_LOGS);
   const [config, setConfig] = useState<Record<string, string>>({});
 
   // Loading and Syncer state
@@ -746,6 +754,26 @@ export default function App() {
                 </svg>
               )}
               Sign in with Google Workspace
+            </button>
+
+            {/* Quick Guest / Demo Access Mode Button */}
+            <button
+              type="button"
+              onClick={() => {
+                const guestUser = { email: 'madeflora.com@gmail.com', displayName: 'Tim Pengembang BRIN' };
+                setUser(guestUser);
+                setNeedsAuth(false);
+                const activeSheetId = localStorage.getItem('mcp_spreadsheet_id') || DEFAULT_SPREADSHEET_ID;
+                const activeFolderId = localStorage.getItem('mcp_folder_id') || DEFAULT_DRIVE_FOLDER_ID;
+                const savedProjectName = localStorage.getItem('mcp_project_name') || 'BRIN Master Control Plan';
+                setSpreadsheetId(activeSheetId);
+                setFolderId(activeFolderId);
+                setProjectName(savedProjectName);
+              }}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 active:scale-[0.99] font-bold py-3 px-5 rounded-lg transition-all text-xs cursor-pointer mt-3 shadow-md"
+            >
+              <Sparkles className="h-4 w-4 text-emerald-400" />
+              Buka Pratinjau Master Control Plan (Mode Demo / Tamu)
             </button>
 
             {/* Error 403 / Access Denied Notice */}
