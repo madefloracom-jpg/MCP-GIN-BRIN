@@ -102,6 +102,7 @@ export default function TaskActivityAndWorkflow({
   accessToken,
   summaryContent
 }: TaskActivityAndWorkflowProps) {
+  const activeMembers = teamMembers || [];
   // Active Tab state
   const [activeTab, setActiveTab] = useState<'activity' | 'subtasks' | 'checklists' | 'agenda'>('activity');
   const [internalSubtasks, setInternalSubtasks] = useState<SubtaskItem[]>([]);
@@ -679,7 +680,7 @@ export default function TaskActivityAndWorkflow({
             {showMentionMenu && (
               <div className="bg-white border border-slate-200 rounded-xl shadow-lg p-2 max-h-36 overflow-y-auto space-y-1">
                 <div className="text-[10px] font-bold text-slate-400 uppercase px-2 py-1">Mention Team Member</div>
-                {teamMembers.map(m => (
+                {activeMembers.map(m => (
                   <button
                     key={m.email}
                     type="button"

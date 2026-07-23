@@ -24,6 +24,7 @@ export default function SubtasksEditor({
   teamMembers = [],
   className = ''
 }: SubtasksEditorProps) {
+  const activeMembers = teamMembers || [];
   const [isAdding, setIsAdding] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newAssignee, setNewAssignee] = useState('');
@@ -106,7 +107,7 @@ export default function SubtasksEditor({
       {subtasks.length > 0 && (
         <div className="divide-y divide-slate-100">
           {subtasks.map((st) => {
-            const assigneeMember = teamMembers.find(m => m.email === st.assignee);
+            const assigneeMember = activeMembers.find(m => m.email === st.assignee);
             return (
               <div 
                 key={st.id} 
@@ -144,7 +145,7 @@ export default function SubtasksEditor({
                     className="text-[10px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 cursor-pointer focus:outline-none max-w-[110px] truncate"
                   >
                     <option value="">Unassigned</option>
-                    {teamMembers.map(m => (
+                    {activeMembers.map(m => (
                       <option key={m.email} value={m.email}>
                         {m.name}
                       </option>
@@ -212,7 +213,7 @@ export default function SubtasksEditor({
                   className="bg-transparent focus:outline-none text-slate-600 font-medium cursor-pointer"
                 >
                   <option value="">Assignee</option>
-                  {teamMembers.map(m => (
+                  {activeMembers.map(m => (
                     <option key={m.email} value={m.email}>
                       {m.name}
                     </option>

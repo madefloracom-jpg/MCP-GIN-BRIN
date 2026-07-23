@@ -44,6 +44,8 @@ export default function SpreadsheetGrid({
   onDeleteTask,
   accessToken
 }: SpreadsheetGridProps) {
+  const activeTeamMembers = teamMembers || [];
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [priorityFilter, setPriorityFilter] = useState<string>('All');
@@ -583,11 +585,13 @@ export default function SpreadsheetGrid({
                         <UserPlus className="h-3.5 w-3.5" />
                         Assign Team Resources
                       </label>
-                      <div className="flex flex-wrap gap-2 p-2.5 bg-white border border-slate-200/80 rounded-xl">
-                        {teamMembers.length === 0 ? (
-                          <span className="text-[10px] text-slate-400">No team members registered. Please add team members in the side panel first.</span>
+                      <div className="flex flex-wrap gap-2 p-2.5 bg-white border border-slate-200/80 rounded-xl min-h-[48px] items-center">
+                        {activeTeamMembers.length === 0 ? (
+                          <span className="text-[11px] text-slate-400 italic">
+                            Otomatis terdaftar mengikuti pengguna yang memperbarui/membuat tugas ini.
+                          </span>
                         ) : (
-                          teamMembers.map(m => {
+                          activeTeamMembers.map(m => {
                             const isAssigned = newAssignees.includes(m.email);
                             return (
                               <div 
@@ -809,11 +813,13 @@ export default function SpreadsheetGrid({
                         <UserPlus className="h-3.5 w-3.5" />
                         Assign Team Resources
                       </label>
-                      <div className="flex flex-wrap gap-2 p-2.5 bg-white border border-slate-200/80 rounded-xl">
-                        {teamMembers.length === 0 ? (
-                          <span className="text-[10px] text-slate-400">No team members registered.</span>
+                      <div className="flex flex-wrap gap-2 p-2.5 bg-white border border-slate-200/80 rounded-xl min-h-[48px] items-center">
+                        {activeTeamMembers.length === 0 ? (
+                          <span className="text-[11px] text-slate-400 italic">
+                            Otomatis terdaftar mengikuti pengguna yang memperbarui/membuat tugas ini.
+                          </span>
                         ) : (
-                          teamMembers.map(m => {
+                          activeTeamMembers.map(m => {
                             const isAssigned = (editingTask.assignees || []).includes(m.email);
                             return (
                               <div 

@@ -99,6 +99,8 @@ export interface TeamMember {
   avatarUrl: string;
 }
 
+export const DEFAULT_TEAM_MEMBERS: TeamMember[] = [];
+
 export interface Risk {
   id: string;
   title: string;

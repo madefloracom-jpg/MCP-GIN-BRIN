@@ -62,6 +62,7 @@ export default function Sidebar({
   onSwitchProject,
   onShareProject
 }: SidebarProps) {
+  const activeMembers = teamMembers || [];
   const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
@@ -175,7 +176,7 @@ export default function Sidebar({
             Control Resources
           </span>
           <span className="bg-slate-800 text-slate-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full font-mono">
-            {teamMembers.length}
+            {activeMembers.length}
           </span>
         </button>
 
@@ -264,8 +265,8 @@ export default function Sidebar({
               
               {/* List of team members */}
               <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
-                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 font-mono">Registered Resources ({teamMembers.length})</h4>
-                {teamMembers.map(m => (
+                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 font-mono">Registered Resources ({activeMembers.length})</h4>
+                {activeMembers.map(m => (
                   <div key={m.email} className="flex items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-100">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <img src={m.avatarUrl} alt={m.name} className="h-7 w-7 rounded-full bg-slate-200" />

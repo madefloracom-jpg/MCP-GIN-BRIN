@@ -48,6 +48,7 @@ export default function AgendaEditor({
   className = '',
   accessToken
 }: AgendaEditorProps) {
+  const activeMembers = teamMembers || [];
   const [viewMode, setViewMode] = useState<'timeline' | 'list'>('timeline');
   const [selectedDate, setSelectedDate] = useState<string>(
     taskStartDate || new Date().toISOString().split('T')[0]
@@ -113,7 +114,7 @@ export default function AgendaEditor({
     }
     setLocation('Google Meet');
     setNotes('');
-    setSelectedAttendees(teamMembers.map(m => m.email));
+    setSelectedAttendees(activeMembers.map(m => m.email));
     setIsModalOpen(true);
   };
 
@@ -776,14 +777,14 @@ export default function AgendaEditor({
                 />
               </div>
 
-              {teamMembers.length > 0 && (
+              {activeMembers.length > 0 && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1">
                     <Users className="h-3.5 w-3.5 text-amber-500" />
                     <span>Undang Tim (Peserta Meeting)</span>
                   </label>
                   <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto p-2 bg-slate-50 border border-slate-200 rounded-xl">
-                    {teamMembers.map((m) => {
+                    {activeMembers.map((m) => {
                       const isChecked = selectedAttendees.includes(m.email);
                       return (
                         <label

@@ -23,7 +23,7 @@ import {
   Risk, 
   ActivityLog, 
   TaskStatus, 
-  RiskLevel 
+  RiskLevel
 } from './types';
 import { 
   Loader2, 
@@ -128,6 +128,26 @@ export default function App() {
     );
   }, []);
 
+  // Auto register logged-in user in team members state
+  useEffect(() => {
+    if (user?.email) {
+      setTeamMembers(prev => {
+        if (!prev.some(m => m.email === user.email)) {
+          return [
+            {
+              email: user.email,
+              name: user.displayName || user.email.split('@')[0],
+              role: 'Project Lead',
+              avatarUrl: user.photoURL || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}`
+            },
+            ...prev
+          ];
+        }
+        return prev;
+      });
+    }
+  }, [user]);
+
   // Sync URL search params when spreadsheetId changes
   useEffect(() => {
     if (spreadsheetId) {
@@ -146,7 +166,21 @@ export default function App() {
       const data = await fetchProjectData(token, sheetId);
       setTasks(applyWbsRollups(data.tasks));
       setMilestones(data.milestones);
-      setTeamMembers(data.teamMembers);
+      
+      let effectiveTeam = data.teamMembers || [];
+      if (user?.email && !effectiveTeam.some(m => m.email === user.email)) {
+        effectiveTeam = [
+          {
+            email: user.email,
+            name: user.displayName || user.email.split('@')[0],
+            role: 'Project Lead',
+            avatarUrl: user.photoURL || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}`
+          },
+          ...effectiveTeam
+        ];
+      }
+      setTeamMembers(effectiveTeam);
+      
       setRisks(data.risks);
       setLogs(data.logs);
       setConfig(data.config);
@@ -336,22 +370,85 @@ export default function App() {
   // ================= TASK MUTATIONS =================
   const handleAddTask = (newTaskData: Omit<Task, 'id'>) => {
     const randomId = 'TSK-' + Math.floor(1000 + Math.random() * 9000);
-    const newTask: Task = { ...newTaskData, id: randomId };
+
+    // Auto assign current user if assignees list is empty
+    let updatedAssignees = newTaskData.assignees || [];
+    if (updatedAssignees.length === 0 && user?.email) {
+      updatedAssignees = [user.email];
+    }
+
+    const newTask: Task = { 
+      ...newTaskData, 
+      id: randomId,
+      assignees: updatedAssignees 
+    };
+    
+    // Auto register active user & task assignees to teamMembers
+    let updatedTeam = [...teamMembers];
+    if (user?.email && !updatedTeam.some(m => m.email === user.email)) {
+      updatedTeam.unshift({
+        email: user.email,
+        name: user.displayName || user.email.split('@')[0],
+        role: 'Project Lead',
+        avatarUrl: user.photoURL || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}`
+      });
+    }
+    updatedAssignees.forEach(email => {
+      if (!updatedTeam.some(m => m.email === email)) {
+        updatedTeam.push({
+          email,
+          name: email.split('@')[0],
+          role: 'Team Member',
+          avatarUrl: `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(email)}`
+        });
+      }
+    });
+
+    setTeamMembers(updatedTeam);
     
     const rolledUpTasks = applyWbsRollups([...tasks, newTask]);
     setTasks(rolledUpTasks);
     
     const updatedLogs = addLogEntry('Task Created', `Initiated task "${newTask.name}" with ID ${randomId}.`);
-    saveDatabaseValues(rolledUpTasks, milestones, teamMembers, risks, updatedLogs);
+    saveDatabaseValues(rolledUpTasks, milestones, updatedTeam, risks, updatedLogs);
   };
 
   const handleUpdateTask = (updatedTask: Task) => {
-    const updatedTasks = tasks.map(t => t.id === updatedTask.id ? updatedTask : t);
+    let updatedAssignees = updatedTask.assignees || [];
+    if (updatedAssignees.length === 0 && user?.email) {
+      updatedAssignees = [user.email];
+    }
+    const finalTask = { ...updatedTask, assignees: updatedAssignees };
+
+    // Auto register active user & task assignees to teamMembers
+    let updatedTeam = [...teamMembers];
+    if (user?.email && !updatedTeam.some(m => m.email === user.email)) {
+      updatedTeam.unshift({
+        email: user.email,
+        name: user.displayName || user.email.split('@')[0],
+        role: 'Project Lead',
+        avatarUrl: user.photoURL || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(user.email)}`
+      });
+    }
+    updatedAssignees.forEach(email => {
+      if (!updatedTeam.some(m => m.email === email)) {
+        updatedTeam.push({
+          email,
+          name: email.split('@')[0],
+          role: 'Team Member',
+          avatarUrl: `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(email)}`
+        });
+      }
+    });
+
+    setTeamMembers(updatedTeam);
+
+    const updatedTasks = tasks.map(t => t.id === finalTask.id ? finalTask : t);
     const rolledUpTasks = applyWbsRollups(updatedTasks);
     setTasks(rolledUpTasks);
 
-    const updatedLogs = addLogEntry('Task Modified', `Updated parameters of task "${updatedTask.name}" (${updatedTask.id}).`);
-    saveDatabaseValues(rolledUpTasks, milestones, teamMembers, risks, updatedLogs);
+    const updatedLogs = addLogEntry('Task Modified', `Updated parameters of task "${finalTask.name}" (${finalTask.id}).`);
+    saveDatabaseValues(rolledUpTasks, milestones, updatedTeam, risks, updatedLogs);
   };
 
   const handleDeleteTask = (taskId: string) => {

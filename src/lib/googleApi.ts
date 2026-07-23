@@ -262,11 +262,7 @@ export async function initializeSpreadsheet(
     writeSheetValues(accessToken, spreadsheetId, `'${SHEETS.LOGS}'!A1`, logHeaders)
   ]);
 
-  // Seed default admin team member if desired
-  const defaultTeam = [
-    ['madeflora.id@gmail.com', 'Made Flora', 'Project Director', 'https://api.dicebear.com/7.x/adventurer/svg?seed=MadeFlora']
-  ];
-  await writeSheetValues(accessToken, spreadsheetId, `'${SHEETS.TEAM}'!A2`, defaultTeam);
+  // Seed default team member from user if provided dynamically during initialization
 
   // Seed default active log
   const defaultLog = [

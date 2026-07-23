@@ -26,6 +26,7 @@ export default function ChecklistsEditor({
   teamMembers = [],
   className = ''
 }: ChecklistsEditorProps) {
+  const activeMembers = teamMembers || [];
   const [hideCompleted, setHideCompleted] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   
@@ -217,7 +218,7 @@ export default function ChecklistsEditor({
                   {/* Checklist Items List */}
                   <div className="space-y-1">
                     {visibleItems.map((item) => {
-                      const assignedMember = teamMembers.find(m => m.email === item.assignee);
+                      const assignedMember = activeMembers.find(m => m.email === item.assignee);
 
                       return (
                         <div 
@@ -263,7 +264,7 @@ export default function ChecklistsEditor({
                                 title={assignedMember ? `Assigned to ${assignedMember.name}` : 'Assign member'}
                               >
                                 <option value="">Unassigned</option>
-                                {teamMembers.map(m => (
+                                {activeMembers.map(m => (
                                   <option key={m.email} value={m.email}>
                                     {m.name}
                                   </option>
@@ -332,7 +333,7 @@ export default function ChecklistsEditor({
                             title="Assign member before adding"
                           >
                             <option value="">Unassigned</option>
-                            {teamMembers.map(m => (
+                            {activeMembers.map(m => (
                               <option key={m.email} value={m.email}>
                                 {m.name}
                               </option>
@@ -342,7 +343,7 @@ export default function ChecklistsEditor({
                           {newItemAssignees[group.id] ? (
                             <div className="flex items-center gap-1 bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full text-[10px] font-semibold">
                               <span className="max-w-[70px] truncate">
-                                {teamMembers.find(m => m.email === newItemAssignees[group.id])?.name.split(' ')[0]}
+                                {activeMembers.find(m => m.email === newItemAssignees[group.id])?.name.split(' ')[0]}
                               </span>
                             </div>
                           ) : (
