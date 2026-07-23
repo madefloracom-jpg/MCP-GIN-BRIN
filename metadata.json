@@ -1,0 +1,8 @@
+{
+  "name": "Master Control Plan (MCP)",
+  "description": "Enterprise-grade project planning, scheduling, and tracking dashboard with real-time Google Sheets database and Google Drive document integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
