@@ -335,8 +335,8 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    if (accessToken && spreadsheetId) {
-      loadDatabaseValues(accessToken, spreadsheetId);
+    if (spreadsheetId) {
+      loadDatabaseValues(accessToken || '', spreadsheetId);
     }
   }, [accessToken, spreadsheetId, loadDatabaseValues]);
 

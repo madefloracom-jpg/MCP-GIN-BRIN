@@ -252,7 +252,7 @@ export default function DashboardView({ tasks, milestones, teamMembers }: Dashbo
             <span className="text-[10px] bg-blue-500/20 text-blue-300 font-mono uppercase tracking-widest px-2.5 py-1 rounded border border-blue-500/30 font-bold">
               Executive Progress Summary
             </span>
-            <h2 className="text-xl md:text-2xl font-black tracking-tight">Kinerja Ketercapaian Fisik Proyek</h2>
+            <h2 className="text-xl md:text-2xl font-black tracking-tight">DASHBOARD MCP GIN-BRIN</h2>
             <p className="text-slate-300 text-xs max-w-xl leading-relaxed">
               Pemantauan real-time terhadap penyelesaian paket kerja (WBS), pencapaian milestone penting, serta analisis hambatan jadwal proyek secara objektif.
             </p>

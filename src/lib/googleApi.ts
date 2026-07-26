@@ -27,12 +27,15 @@ const SHEETS = {
 };
 
 // Help helper to call APIs with retries for transient 5xx or rate limit errors
-async function apiFetch(url: string, accessToken: string, options: RequestInit = {}, retries = 3) {
-  const headers = {
-    'Authorization': `Bearer ${accessToken}`,
+async function apiFetch(url: string, accessToken?: string, options: RequestInit = {}, retries = 3) {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string>),
   };
+
+  if (accessToken && accessToken.trim() !== '') {
+    headers['Authorization'] = `Bearer ${accessToken}`;
+  }
 
   let lastError: any;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -331,6 +334,9 @@ export async function initializeSpreadsheet(
  * Reads data from a single sheet range with error resilience
  */
 async function readSheetValues(accessToken: string, spreadsheetId: string, range: string): Promise<any[][]> {
+  if (!accessToken || accessToken.trim() === '') {
+    return [];
+  }
   try {
     const data = await apiFetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`, accessToken);
     return data.values || [];
@@ -345,13 +351,110 @@ async function readSheetValues(accessToken: string, spreadsheetId: string, range
 }
 
 /**
- * Reads multiple sheet ranges efficiently using batchGet with single-quoted sheet ranges
+ * Parses raw CSV text into a 2D string array
+ */
+function parseCsvTo2DArray(csvText: string): string[][] {
+  const lines: string[][] = [];
+  let row: string[] = [];
+  let inQuotes = false;
+  let currentVal = '';
+
+  for (let i = 0; i < csvText.length; i++) {
+    const char = csvText[i];
+    const nextChar = csvText[i + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        currentVal += '"';
+        i++;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        currentVal += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        row.push(currentVal);
+        currentVal = '';
+      } else if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+        row.push(currentVal);
+        lines.push(row);
+        row = [];
+        currentVal = '';
+        if (char === '\r') i++;
+      } else if (char === '\r') {
+        row.push(currentVal);
+        lines.push(row);
+        row = [];
+        currentVal = '';
+      } else {
+        currentVal += char;
+      }
+    }
+  }
+  if (currentVal !== '' || row.length > 0) {
+    row.push(currentVal);
+    lines.push(row);
+  }
+  return lines;
+}
+
+/**
+ * Fetches public Google Sheet tab values via gviz/tq CSV export
+ */
+async function fetchPublicSheetValues(spreadsheetId: string, sheetName: string): Promise<string[][]> {
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch public sheet ${sheetName}: ${response.statusText}`);
+  }
+  const text = await response.text();
+  return parseCsvTo2DArray(text);
+}
+
+/**
+ * Fetches all tabs from a public Google Sheet without requiring OAuth authentication
+ */
+async function fetchPublicProjectData(spreadsheetId: string): Promise<Record<string, any[][]>> {
+  const configRange = `'${SHEETS.CONFIG}'!A:B`;
+  const tasksRange = `'${SHEETS.TASKS}'!A:T`;
+  const milestonesRange = `'${SHEETS.MILESTONES}'!A:E`;
+  const teamRange = `'${SHEETS.TEAM}'!A:D`;
+  const risksRange = `'${SHEETS.RISKS}'!A:F`;
+  const logsRange = `'${SHEETS.LOGS}'!A:D`;
+
+  const [configRaw, tasksRaw, milestonesRaw, teamRaw, risksRaw, logsRaw] = await Promise.all([
+    fetchPublicSheetValues(spreadsheetId, SHEETS.CONFIG).catch(() => []),
+    fetchPublicSheetValues(spreadsheetId, SHEETS.TASKS).catch(() => []),
+    fetchPublicSheetValues(spreadsheetId, SHEETS.MILESTONES).catch(() => []),
+    fetchPublicSheetValues(spreadsheetId, SHEETS.TEAM).catch(() => []),
+    fetchPublicSheetValues(spreadsheetId, SHEETS.RISKS).catch(() => []),
+    fetchPublicSheetValues(spreadsheetId, SHEETS.LOGS).catch(() => [])
+  ]);
+
+  return {
+    [configRange]: configRaw,
+    [tasksRange]: tasksRaw,
+    [milestonesRange]: milestonesRaw,
+    [teamRange]: teamRaw,
+    [risksRange]: risksRaw,
+    [logsRange]: logsRaw,
+  };
+}
+
+/**
+ * Reads multiple sheet ranges efficiently using batchGet
  */
 async function fetchBatchSheetValues(
   accessToken: string,
   spreadsheetId: string,
   ranges: string[]
 ): Promise<Record<string, any[][]>> {
+  if (!accessToken || accessToken.trim() === '') {
+    throw new Error('No access token provided for batchGet');
+  }
   const queryRanges = ranges.map(r => `ranges=${encodeURIComponent(r)}`).join('&');
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${queryRanges}`;
 
@@ -366,6 +469,9 @@ async function fetchBatchSheetValues(
     }
     return result;
   } catch (err: any) {
+    if (err.status === 401 || err.status === 403) {
+      throw err;
+    }
     console.warn('batchGet failed, falling back to individual readSheetValues:', err);
     const result: Record<string, any[][]> = {};
     await Promise.all(
@@ -397,32 +503,17 @@ async function clearSheetValues(accessToken: string, spreadsheetId: string, rang
 }
 
 /**
- * Fetches the entire project database from Google Sheets
+ * Parses raw 2D array data into structured project objects
  */
-export async function fetchProjectData(accessToken: string, spreadsheetId: string): Promise<{
-  config: Record<string, string>;
-  tasks: Task[];
-  milestones: Milestone[];
-  teamMembers: TeamMember[];
-  risks: Risk[];
-  logs: ActivityLog[];
-}> {
-  const configRange = `'${SHEETS.CONFIG}'!A:B`;
-  const tasksRange = `'${SHEETS.TASKS}'!A:T`;
-  const milestonesRange = `'${SHEETS.MILESTONES}'!A:E`;
-  const teamRange = `'${SHEETS.TEAM}'!A:D`;
-  const risksRange = `'${SHEETS.RISKS}'!A:F`;
-  const logsRange = `'${SHEETS.LOGS}'!A:D`;
-
-  const batchResult = await fetchBatchSheetValues(accessToken, spreadsheetId, [
-    configRange,
-    tasksRange,
-    milestonesRange,
-    teamRange,
-    risksRange,
-    logsRange
-  ]);
-
+function parseRawSheetData(
+  batchResult: Record<string, any[][]>,
+  configRange: string,
+  tasksRange: string,
+  milestonesRange: string,
+  teamRange: string,
+  risksRange: string,
+  logsRange: string
+) {
   const configRaw = batchResult[configRange] || [];
   const tasksRaw = batchResult[tasksRange] || [];
   const milestonesRaw = batchResult[milestonesRange] || [];
@@ -569,6 +660,52 @@ export async function fetchProjectData(accessToken: string, spreadsheetId: strin
   });
 
   return { config, tasks, milestones, teamMembers, risks, logs };
+}
+
+/**
+ * Fetches the entire project database from Google Sheets
+ */
+export async function fetchProjectData(accessToken: string, spreadsheetId: string): Promise<{
+  config: Record<string, string>;
+  tasks: Task[];
+  milestones: Milestone[];
+  teamMembers: TeamMember[];
+  risks: Risk[];
+  logs: ActivityLog[];
+}> {
+  const configRange = `'${SHEETS.CONFIG}'!A:B`;
+  const tasksRange = `'${SHEETS.TASKS}'!A:T`;
+  const milestonesRange = `'${SHEETS.MILESTONES}'!A:E`;
+  const teamRange = `'${SHEETS.TEAM}'!A:D`;
+  const risksRange = `'${SHEETS.RISKS}'!A:F`;
+  const logsRange = `'${SHEETS.LOGS}'!A:D`;
+
+  let batchResult: Record<string, any[][]> = {};
+
+  if (accessToken && accessToken.trim() !== '') {
+    try {
+      batchResult = await fetchBatchSheetValues(accessToken, spreadsheetId, [
+        configRange,
+        tasksRange,
+        milestonesRange,
+        teamRange,
+        risksRange,
+        logsRange
+      ]);
+    } catch (err: any) {
+      console.warn('Authenticated batchGet failed, falling back to public sheet fetch:', err);
+      try {
+        batchResult = await fetchPublicProjectData(spreadsheetId);
+      } catch {
+        throw err;
+      }
+    }
+  } else {
+    // No access token: fetch public sheet data directly
+    batchResult = await fetchPublicProjectData(spreadsheetId);
+  }
+
+  return parseRawSheetData(batchResult, configRange, tasksRange, milestonesRange, teamRange, risksRange, logsRange);
 }
 
 /**
