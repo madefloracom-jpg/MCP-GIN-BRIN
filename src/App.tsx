@@ -39,6 +39,47 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+// Helper to merge two task objects preserving user inputs, subtasks, checklists, and status
+function mergeTaskObjects(base: Task, incoming: Task): Task {
+  let status: TaskStatus = incoming.status || base.status || 'To Do';
+  let progress: number = incoming.progress !== undefined ? incoming.progress : (base.progress || 0);
+
+  const rawStatus = (status || '').toString().trim().toLowerCase();
+  if (progress === 100 || status === 'Completed' || rawStatus === 'selesai' || rawStatus === 'done' || rawStatus === 'finished') {
+    status = 'Completed';
+    progress = 100;
+  } else if (progress > 0) {
+    status = 'In Progress';
+  } else if (progress === 0 && status !== 'In Progress') {
+    status = 'To Do';
+  }
+
+  const subtasks = (incoming.subtasks && incoming.subtasks.length > 0) ? incoming.subtasks : (base.subtasks || []);
+  const checklists = (incoming.checklists && incoming.checklists.length > 0) ? incoming.checklists : (base.checklists || []);
+  const activities = (incoming.activities && incoming.activities.length > 0) ? incoming.activities : (base.activities || []);
+  const agendas = (incoming.agendas && incoming.agendas.length > 0) ? incoming.agendas : (base.agendas || []);
+  const assignees = (incoming.assignees && incoming.assignees.length > 0) ? incoming.assignees : (base.assignees || []);
+
+  return {
+    ...base,
+    ...incoming,
+    status,
+    progress,
+    priority: incoming.priority || base.priority || 'Normal',
+    startDate: incoming.startDate || base.startDate,
+    endDate: incoming.endDate || base.endDate,
+    duration: incoming.duration || base.duration,
+    budget: incoming.budget !== undefined ? incoming.budget : base.budget,
+    actualCost: incoming.actualCost !== undefined ? incoming.actualCost : base.actualCost,
+    notes: incoming.notes || base.notes,
+    subtasks,
+    checklists,
+    activities,
+    agendas,
+    assignees,
+  };
+}
+
 // Subcomponents
 import { applyWbsRollups } from './lib/rollup';
 import { 
@@ -236,18 +277,7 @@ export default function App() {
           if (!existing) {
             taskMap.set(ft.id, ft);
           } else {
-            const ftIsCompleted = ft.status === 'Completed' || (ft.progress || 0) === 100;
-            const existingIsCompleted = existing.status === 'Completed' || (existing.progress || 0) === 100;
-
-            taskMap.set(ft.id, {
-              ...existing,
-              ...ft,
-              status: (ftIsCompleted || existingIsCompleted) ? 'Completed' : (ft.status || existing.status),
-              progress: Math.max(ft.progress || 0, existing.progress || 0),
-              subtasks: (ft.subtasks && ft.subtasks.length > 0) ? ft.subtasks : existing.subtasks,
-              checklists: (ft.checklists && ft.checklists.length > 0) ? ft.checklists : existing.checklists,
-              activities: (ft.activities && ft.activities.length > 0) ? ft.activities : existing.activities
-            });
+            taskMap.set(ft.id, mergeTaskObjects(existing, ft));
           }
         });
       }
@@ -262,13 +292,7 @@ export default function App() {
               if (!existing) {
                 taskMap.set(ct.id, ct);
               } else {
-                const ctIsCompleted = ct.status === 'Completed' || (ct.progress || 0) === 100;
-                taskMap.set(ct.id, {
-                  ...existing,
-                  ...ct,
-                  status: ctIsCompleted ? 'Completed' : existing.status,
-                  progress: Math.max(ct.progress || 0, existing.progress || 0)
-                });
+                taskMap.set(ct.id, mergeTaskObjects(existing, ct));
               }
             });
           }
@@ -398,16 +422,8 @@ export default function App() {
           const prevMap = new Map<string, Task>(prevTasks.map(t => [t.id, t]));
           const merged: Task[] = cloudData.tasks.map((ct: Task) => {
             const prev = prevMap.get(ct.id);
-            const ctIsCompleted = ct.status === 'Completed' || (ct.progress || 0) === 100;
             if (prev) {
-              const prevIsCompleted = prev.status === 'Completed' || (prev.progress || 0) === 100;
-              if (ctIsCompleted) {
-                return { ...ct, status: 'Completed' as TaskStatus, progress: 100 };
-              }
-              if ((ct.progress || 0) >= (prev.progress || 0)) {
-                return ct;
-              }
-              return prevIsCompleted ? prev : ct;
+              return mergeTaskObjects(prev, ct);
             }
             return ct;
           });
