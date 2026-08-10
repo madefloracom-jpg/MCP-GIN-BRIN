@@ -428,6 +428,13 @@ export default function App() {
     if (!spreadsheetId) return;
 
     const unsubscribe = subscribeToFirestore(spreadsheetId, (cloudData) => {
+      let updatedTasks = tasks;
+      let updatedMilestones = milestones;
+      let updatedTeam = teamMembers;
+      let updatedRisks = risks;
+      let updatedLogs = logs;
+      let updatedDocs = documents;
+
       if (cloudData.tasks && Array.isArray(cloudData.tasks) && cloudData.tasks.length > 0) {
         setTasks(prevTasks => {
           const prevMap = new Map<string, Task>(prevTasks.map(t => [t.id, t]));
@@ -438,15 +445,43 @@ export default function App() {
             }
             return ct;
           });
-          return applyWbsRollups(merged);
+          updatedTasks = applyWbsRollups(merged);
+          return updatedTasks;
         });
       }
-      if (cloudData.milestones && cloudData.milestones.length > 0) setMilestones(cloudData.milestones);
-      if (cloudData.teamMembers && cloudData.teamMembers.length > 0) setTeamMembers(cloudData.teamMembers);
-      if (cloudData.risks && cloudData.risks.length > 0) setRisks(cloudData.risks);
-      if (cloudData.logs && cloudData.logs.length > 0) setLogs(cloudData.logs);
-      if (cloudData.documents && Array.isArray(cloudData.documents)) setDocuments(cloudData.documents);
+      if (cloudData.milestones && cloudData.milestones.length > 0) {
+        updatedMilestones = cloudData.milestones;
+        setMilestones(updatedMilestones);
+      }
+      if (cloudData.teamMembers && cloudData.teamMembers.length > 0) {
+        updatedTeam = cloudData.teamMembers;
+        setTeamMembers(updatedTeam);
+      }
+      if (cloudData.risks && cloudData.risks.length > 0) {
+        updatedRisks = cloudData.risks;
+        setRisks(updatedRisks);
+      }
+      if (cloudData.logs && cloudData.logs.length > 0) {
+        updatedLogs = cloudData.logs;
+        setLogs(updatedLogs);
+      }
+      if (cloudData.documents && Array.isArray(cloudData.documents)) {
+        updatedDocs = cloudData.documents;
+        setDocuments(updatedDocs);
+      }
       setLastSyncTime(new Date().toLocaleTimeString());
+
+      // Instantly sync browser cache (mcp_cache) with real-time updates from Firestore
+      const updatedCache = {
+        tasks: updatedTasks,
+        milestones: updatedMilestones,
+        teamMembers: updatedTeam,
+        risks: updatedRisks,
+        logs: updatedLogs,
+        documents: updatedDocs,
+        timestamp: new Date().toISOString()
+      };
+      localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(updatedCache));
     });
 
     return () => unsubscribe();
@@ -595,6 +630,22 @@ export default function App() {
     };
     const updatedLogs = [newLog, ...logs];
     setLogs(updatedLogs);
+
+    // Save synchronously to local browser cache and Cloud Firestore
+    const cacheData = {
+      tasks,
+      milestones,
+      teamMembers,
+      risks,
+      logs: updatedLogs,
+      documents,
+      timestamp: new Date().toISOString()
+    };
+    if (spreadsheetId) {
+      localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
+      saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
+    }
+
     return updatedLogs;
   };
 
