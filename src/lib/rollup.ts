@@ -151,6 +151,19 @@ export function applyWbsRollups(tasks: Task[]): Task[] {
     }
   });
 
-  // Map back to original order of tasks
-  return tasks.map(orig => taskMap.get(orig.id) || orig);
+  // Map back to original order of tasks with status/progress normalization
+  return tasks.map(orig => {
+    const updated = taskMap.get(orig.id) || orig;
+    const rawStatus = (updated.status || '').toString().trim().toLowerCase();
+    const isCompleted = updated.progress === 100 || updated.status === 'Completed' || rawStatus === 'selesai' || rawStatus === 'done' || rawStatus === 'finished';
+
+    if (isCompleted) {
+      return { ...updated, status: 'Completed', progress: 100 };
+    } else if (updated.progress > 0) {
+      return { ...updated, status: 'In Progress' };
+    } else if (updated.progress === 0 && updated.status !== 'In Progress') {
+      return { ...updated, status: 'To Do' };
+    }
+    return updated;
+  });
 }

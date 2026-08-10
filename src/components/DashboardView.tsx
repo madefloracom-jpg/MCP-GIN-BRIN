@@ -60,10 +60,14 @@ export default function DashboardView({ tasks, milestones, teamMembers }: Dashbo
     let notStartedCount = 0;
 
     tasks.forEach(t => {
-      sumProgress += t.progress || 0;
-      if (t.status === 'Completed') completedCount++;
-      else if (t.status === 'In Progress') inProgressCount++;
-      else if (t.status === 'Not Started') notStartedCount++;
+      const prog = t.progress || 0;
+      const rawStatus = (t.status || '').toString().trim().toLowerCase();
+      const isCompleted = t.status === 'Completed' || prog === 100 || rawStatus === 'selesai' || rawStatus === 'done' || rawStatus === 'finished';
+      const isInProgress = !isCompleted && (t.status === 'In Progress' || prog > 0 || rawStatus === 'dalam pengerjaan' || rawStatus === 'sedang berjalan' || rawStatus === 'in_progress');
+
+      sumProgress += prog;
+      if (isCompleted) completedCount++;
+      else if (isInProgress) inProgressCount++;
       else notStartedCount++;
     });
 
@@ -215,8 +219,13 @@ export default function DashboardView({ tasks, milestones, teamMembers }: Dashbo
       'Completed': 0
     };
     tasks.forEach(t => {
-      const statusKey = (t.status === 'Not Started' || !t.status) ? 'To Do' : t.status;
-      if (counts[statusKey] !== undefined) counts[statusKey]++;
+      const prog = t.progress || 0;
+      const rawStatus = (t.status || '').toString().trim().toLowerCase();
+      const isCompleted = t.status === 'Completed' || prog === 100 || rawStatus === 'selesai' || rawStatus === 'done' || rawStatus === 'finished';
+      const isInProgress = !isCompleted && (t.status === 'In Progress' || prog > 0 || rawStatus === 'dalam pengerjaan' || rawStatus === 'sedang berjalan' || rawStatus === 'in_progress');
+
+      if (isCompleted) counts['Completed']++;
+      else if (isInProgress) counts['In Progress']++;
       else counts['To Do']++;
     });
     return Object.keys(counts).map(status => ({

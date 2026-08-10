@@ -43,7 +43,7 @@ async function apiFetch(url: string, accessToken?: string, options: RequestInit 
       const response = await fetch(url, { ...options, headers });
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`API Error on URL ${url} (Attempt ${attempt + 1}/${retries + 1}):`, errText);
+        console.warn(`API response not OK on URL ${url} (${response.status}):`, errText);
         
         let detailedMsg = errText;
         let activationUrl = '';
@@ -343,7 +343,7 @@ async function readSheetValues(accessToken: string, spreadsheetId: string, range
   } catch (err: any) {
     console.warn(`Warning: failed to read range ${range}:`, err);
     if (err.status >= 400) {
-      console.error(`Error reading range ${range}, returning empty array fallback.`);
+      console.warn(`Error reading range ${range}, returning empty array fallback.`);
       return [];
     }
     throw err;
@@ -556,12 +556,24 @@ function parseRawSheetData(
       predecessors = row[9].split(',').map((s: string) => s.trim()).filter(Boolean);
     }
 
+    const rawStatusStr = (row[3] || '').toString().trim().toLowerCase();
+    const taskProg = Math.max(0, Math.min(100, Number(row[4]) || 0));
+    let parsedStatus: TaskStatus = 'To Do';
+
+    if (rawStatusStr === 'completed' || rawStatusStr === 'selesai' || rawStatusStr === 'done' || rawStatusStr === 'finished' || taskProg === 100) {
+      parsedStatus = 'Completed';
+    } else if (rawStatusStr === 'in progress' || rawStatusStr === 'dalam pengerjaan' || rawStatusStr === 'sedang berjalan' || rawStatusStr === 'in_progress' || taskProg > 0) {
+      parsedStatus = 'In Progress';
+    } else {
+      parsedStatus = 'To Do';
+    }
+
     tasks.push({
       id: row[0],
       wbs: row[1] || '1.0',
       name: row[2] || 'Untitled Task',
-      status: (row[3] as TaskStatus) || 'To Do',
-      progress: Math.max(0, Math.min(100, Number(row[4]) || 0)),
+      status: parsedStatus,
+      progress: taskProg,
       startDate: row[5] || '',
       endDate: row[6] || '',
       duration: Number(row[7]) || 1,

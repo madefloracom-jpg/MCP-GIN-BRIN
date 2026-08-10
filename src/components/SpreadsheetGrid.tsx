@@ -88,10 +88,14 @@ export default function SpreadsheetGrid({
       const matchSearch = t.name.toLowerCase().includes(search.toLowerCase()) || 
                           t.wbs.includes(search) || 
                           t.id.toLowerCase().includes(search.toLowerCase());
+      const rawStatus = (t.status || '').toString().trim().toLowerCase();
+      const isCompleted = t.status === 'Completed' || t.progress === 100 || rawStatus === 'selesai' || rawStatus === 'done';
+      const isInProgress = !isCompleted && (t.status === 'In Progress' || (t.progress || 0) > 0 || rawStatus === 'dalam pengerjaan' || rawStatus === 'sedang berjalan');
+
       const matchStatus = statusFilter === 'All' 
-        || t.status === statusFilter 
-        || (statusFilter === 'To Do' && t.status === 'Not Started')
-        || (statusFilter === 'Not Started' && t.status === 'To Do');
+        || (statusFilter === 'Completed' && isCompleted)
+        || (statusFilter === 'In Progress' && isInProgress)
+        || (statusFilter === 'To Do' && !isCompleted && !isInProgress);
       const matchPriority = priorityFilter === 'All' 
         || (priorityFilter === 'None' && (!t.priority || (t.priority as string) === '')) 
         || (t.priority as string) === priorityFilter;

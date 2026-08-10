@@ -34,12 +34,18 @@ import {
   CloudRain, 
   Sparkles, 
   Lock,
-  AlertTriangle
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Subcomponents
 import { applyWbsRollups } from './lib/rollup';
+import { 
+  saveToFirestore, 
+  fetchFromFirestore, 
+  subscribeToFirestore 
+} from './lib/firestoreSync';
 import firebaseConfig from '../firebase-applet-config.json';
 import SetupWizard from './components/SetupWizard';
 import Sidebar from './components/Sidebar';
@@ -194,58 +200,97 @@ export default function App() {
   }, [spreadsheetId]);
 
   // Fetch spreadsheet data once authenticated & spreadsheetId is set
-  const loadDatabaseValues = useCallback(async (token: string, sheetId: string) => {
-    setIsLoadingData(true);
+  const loadDatabaseValues = useCallback(async (token: string, sheetId: string, isBackground = false) => {
+    if (!isBackground) setIsLoadingData(true);
     try {
-      const data = await fetchProjectData(token, sheetId);
+      // Fetch remote sheet data and firestore data in parallel
+      const [dataResult, firestoreData] = await Promise.all([
+        fetchProjectData(token, sheetId).catch(err => {
+          console.warn('fetchProjectData failed:', err);
+          return { config: {}, tasks: [], milestones: [], teamMembers: [], risks: [], logs: [] };
+        }),
+        fetchFromFirestore(sheetId).catch(() => null)
+      ]);
 
-      // Load remote data strictly from Google Sheets
       const cacheKey = `mcp_cache_${sheetId}`;
       const cachedStr = localStorage.getItem(cacheKey);
-      let effectiveTasks = data.tasks || [];
 
-      if (effectiveTasks.length > 0) {
-        if (cachedStr) {
-          try {
-            const cached = JSON.parse(cachedStr);
-            if (cached.tasks && Array.isArray(cached.tasks)) {
-              const localMap = new Map<string, Task>(cached.tasks.map((t: Task) => [t.id, t]));
-              effectiveTasks = effectiveTasks.map((rt: Task) => {
-                const lt = localMap.get(rt.id);
-                if (!lt) return rt;
-                return {
-                  ...rt,
-                  priority: (rt.priority || lt.priority || 'Normal'),
-                  subtasks: (rt.subtasks && rt.subtasks.length > 0) ? rt.subtasks : (lt.subtasks || []),
-                  checklists: (rt.checklists && rt.checklists.length > 0) ? rt.checklists : (lt.checklists || []),
-                  activities: (rt.activities && rt.activities.length > 0) ? rt.activities : (lt.activities || []),
-                  agendas: (rt.agendas && rt.agendas.length > 0) ? rt.agendas : (lt.agendas || []),
-                };
-              });
-            }
-          } catch (e) {
-            console.error('Error merging local cache:', e);
+      // Merge task lists from Google Sheets, Firestore, and local cache
+      const taskMap = new Map<string, Task>();
+
+      // A. Add initial/sheet tasks
+      const sheetTasks = dataResult.tasks && dataResult.tasks.length > 0 ? dataResult.tasks : [];
+      sheetTasks.forEach((st: Task) => taskMap.set(st.id, {
+        ...st,
+        priority: st.priority || 'Normal',
+        subtasks: st.subtasks || [],
+        checklists: st.checklists || [],
+        activities: st.activities || [],
+        agendas: st.agendas || [],
+      }));
+
+      // B. Merge Firestore tasks (contains team real-time updates across all users)
+      if (firestoreData?.tasks && Array.isArray(firestoreData.tasks)) {
+        firestoreData.tasks.forEach((ft: Task) => {
+          const existing = taskMap.get(ft.id);
+          if (!existing) {
+            taskMap.set(ft.id, ft);
+          } else {
+            const ftIsCompleted = ft.status === 'Completed' || (ft.progress || 0) === 100;
+            const existingIsCompleted = existing.status === 'Completed' || (existing.progress || 0) === 100;
+
+            taskMap.set(ft.id, {
+              ...existing,
+              ...ft,
+              status: (ftIsCompleted || existingIsCompleted) ? 'Completed' : (ft.status || existing.status),
+              progress: Math.max(ft.progress || 0, existing.progress || 0),
+              subtasks: (ft.subtasks && ft.subtasks.length > 0) ? ft.subtasks : existing.subtasks,
+              checklists: (ft.checklists && ft.checklists.length > 0) ? ft.checklists : existing.checklists,
+              activities: (ft.activities && ft.activities.length > 0) ? ft.activities : existing.activities
+            });
           }
-        }
-      } else if (cachedStr) {
+        });
+      }
+
+      // C. Merge local cache tasks
+      if (cachedStr) {
         try {
           const cached = JSON.parse(cachedStr);
-          if (cached.tasks && Array.isArray(cached.tasks) && cached.tasks.length > 0) {
-            effectiveTasks = cached.tasks;
-          } else {
-            effectiveTasks = [...INITIAL_BRIN_TASKS];
+          if (cached.tasks && Array.isArray(cached.tasks)) {
+            cached.tasks.forEach((ct: Task) => {
+              const existing = taskMap.get(ct.id);
+              if (!existing) {
+                taskMap.set(ct.id, ct);
+              } else {
+                const ctIsCompleted = ct.status === 'Completed' || (ct.progress || 0) === 100;
+                taskMap.set(ct.id, {
+                  ...existing,
+                  ...ct,
+                  status: ctIsCompleted ? 'Completed' : existing.status,
+                  progress: Math.max(ct.progress || 0, existing.progress || 0)
+                });
+              }
+            });
           }
         } catch (e) {
-          effectiveTasks = [...INITIAL_BRIN_TASKS];
+          console.error('Error parsing local cache merge:', e);
         }
-      } else {
+      }
+
+      let effectiveTasks = Array.from(taskMap.values());
+      if (effectiveTasks.length === 0) {
         effectiveTasks = [...INITIAL_BRIN_TASKS];
       }
 
-      // Milestones, Team, Risks, Logs strictly from Sheet or fallbacks
-      let effectiveMilestones = (data.milestones && data.milestones.length > 0) ? data.milestones : INITIAL_BRIN_MILESTONES;
+      // Milestones, Team, Risks, Logs strictly from Sheet / Firestore or fallbacks
+      let effectiveMilestones = (firestoreData?.milestones && firestoreData.milestones.length > 0)
+        ? firestoreData.milestones
+        : ((dataResult.milestones && dataResult.milestones.length > 0) ? dataResult.milestones : INITIAL_BRIN_MILESTONES);
       
-      let effectiveTeam = (data.teamMembers && data.teamMembers.length > 0) ? data.teamMembers : [...INITIAL_BRIN_TEAM];
+      let effectiveTeam = (firestoreData?.teamMembers && firestoreData.teamMembers.length > 0)
+        ? firestoreData.teamMembers
+        : ((dataResult.teamMembers && dataResult.teamMembers.length > 0) ? dataResult.teamMembers : [...INITIAL_BRIN_TEAM]);
+      
       if (user?.email && !effectiveTeam.some(m => m.email === user.email)) {
         effectiveTeam.unshift({
           email: user.email,
@@ -255,20 +300,26 @@ export default function App() {
         });
       }
 
-      let effectiveRisks = (data.risks && data.risks.length > 0) ? data.risks : INITIAL_BRIN_RISKS;
-      let effectiveLogs = (data.logs && data.logs.length > 0) ? data.logs : INITIAL_BRIN_LOGS;
+      let effectiveRisks = (firestoreData?.risks && firestoreData.risks.length > 0)
+        ? firestoreData.risks
+        : ((dataResult.risks && dataResult.risks.length > 0) ? dataResult.risks : INITIAL_BRIN_RISKS);
+      
+      let effectiveLogs = (firestoreData?.logs && firestoreData.logs.length > 0)
+        ? firestoreData.logs
+        : ((dataResult.logs && dataResult.logs.length > 0) ? dataResult.logs : INITIAL_BRIN_LOGS);
 
-      setTasks(applyWbsRollups(effectiveTasks));
+      const rolledUpTasks = applyWbsRollups(effectiveTasks);
+      setTasks(rolledUpTasks);
       setMilestones(effectiveMilestones);
       setTeamMembers(effectiveTeam);
       setRisks(effectiveRisks);
       setLogs(effectiveLogs);
-      setConfig(data.config || {});
+      setConfig(dataResult.config || {});
       setLastSyncTime(new Date().toLocaleTimeString());
 
-      // Save state back to cache for this specific sheet
+      // Save state back to cache & Firestore
       const updatedCache = {
-        tasks: effectiveTasks,
+        tasks: rolledUpTasks,
         milestones: effectiveMilestones,
         teamMembers: effectiveTeam,
         risks: effectiveRisks,
@@ -276,6 +327,7 @@ export default function App() {
         timestamp: new Date().toISOString()
       };
       localStorage.setItem(`mcp_cache_${sheetId}`, JSON.stringify(updatedCache));
+      saveToFirestore(sheetId, updatedCache, user?.email || undefined);
     } catch (err: any) {
       console.error('Failed to load database values:', err);
 
@@ -302,41 +354,88 @@ export default function App() {
       const isDisabled = isDriveDisabled || isSheetsDisabled || errMsg.includes('SERVICE_DISABLED') || errMsg.includes('has not been used');
       const isPermissionDenied = errMsg.includes('403') || errMsg.includes('404') || errMsg.includes('permission') || errMsg.includes('Permission') || errMsg.includes('does not have permission');
 
-      if (isDisabled) {
-        const defaultUrl = isDriveDisabled 
-          ? 'https://console.developers.google.com/apis/api/drive.googleapis.com/overview'
-          : 'https://console.developers.google.com/apis/api/sheets.googleapis.com/overview';
-        const activationUrl = err.activationUrl || defaultUrl;
-        const apiTitle = isDriveDisabled ? 'Google Drive API Belum Diaktifkan' : 'Google Sheets API Belum Diaktifkan';
-        
-        setConfirmState({
-          isOpen: true,
-          title: apiTitle,
-          message: `${apiTitle} di Google Cloud Console pada Project Anda.\n\nLangkah Mengatasi:\n1. Klik "Aktifkan API Sekarang" di bawah ini.\n2. Klik tombol [ENABLE / AKTIFKAN] di Google Developers Console.\n3. Tunggu 1-2 menit agar perubahan aktif, lalu muat ulang halaman.`,
-          onConfirm: () => {
-            window.open(activationUrl, '_blank');
-            setConfirmState(prev => ({ ...prev, isOpen: false }));
-          }
-        });
-      } else if (isPermissionDenied) {
-        setConfirmState({
-          isOpen: true,
-          title: 'Izin Akses Google Sheet Ditolak (403)',
-          message: `Akun Google Anda (${user?.email || 'saat ini'}) belum memiliki izin akses ke Spreadsheet ini.\n\nSistem menggunakan data tersimpan lokal di browser Anda agar tugas & priority tidak hilang.`,
-          onConfirm: () => {
-            window.open(`https://docs.google.com/spreadsheets/d/${sheetId}`, '_blank');
-            setConfirmState(prev => ({ ...prev, isOpen: false }));
-          }
-        });
+      if (!isBackground) {
+        if (isDisabled) {
+          const defaultUrl = isDriveDisabled 
+            ? 'https://console.developers.google.com/apis/api/drive.googleapis.com/overview'
+            : 'https://console.developers.google.com/apis/api/sheets.googleapis.com/overview';
+          const activationUrl = err.activationUrl || defaultUrl;
+          const apiTitle = isDriveDisabled ? 'Google Drive API Belum Diaktifkan' : 'Google Sheets API Belum Diaktifkan';
+          
+          setConfirmState({
+            isOpen: true,
+            title: apiTitle,
+            message: `${apiTitle} di Google Cloud Console pada Project Anda.\n\nLangkah Mengatasi:\n1. Klik "Aktifkan API Sekarang" di bawah ini.\n2. Klik tombol [ENABLE / AKTIFKAN] di Google Developers Console.\n3. Tunggu 1-2 menit agar perubahan aktif, lalu muat ulang halaman.`,
+            onConfirm: () => {
+              window.open(activationUrl, '_blank');
+              setConfirmState(prev => ({ ...prev, isOpen: false }));
+            }
+          });
+        } else if (isPermissionDenied) {
+          setConfirmState({
+            isOpen: true,
+            title: 'Izin Akses Google Sheet Ditolak (403)',
+            message: `Akun Google Anda (${user?.email || 'saat ini'}) belum memiliki izin akses ke Spreadsheet ini.\n\nSistem menggunakan data tersimpan lokal di browser Anda agar tugas & priority tidak hilang.`,
+            onConfirm: () => {
+              window.open(`https://docs.google.com/spreadsheets/d/${sheetId}`, '_blank');
+              setConfirmState(prev => ({ ...prev, isOpen: false }));
+            }
+          });
+        }
       }
     } finally {
-      setIsLoadingData(false);
+      if (!isBackground) setIsLoadingData(false);
     }
   }, [user]);
 
+  // Subscribe to real-time Firestore updates for active sheetId
+  useEffect(() => {
+    if (!spreadsheetId) return;
+
+    const unsubscribe = subscribeToFirestore(spreadsheetId, (cloudData) => {
+      if (cloudData.tasks && Array.isArray(cloudData.tasks) && cloudData.tasks.length > 0) {
+        setTasks(prevTasks => {
+          const prevMap = new Map<string, Task>(prevTasks.map(t => [t.id, t]));
+          const merged: Task[] = cloudData.tasks.map((ct: Task) => {
+            const prev = prevMap.get(ct.id);
+            const ctIsCompleted = ct.status === 'Completed' || (ct.progress || 0) === 100;
+            if (prev) {
+              const prevIsCompleted = prev.status === 'Completed' || (prev.progress || 0) === 100;
+              if (ctIsCompleted) {
+                return { ...ct, status: 'Completed' as TaskStatus, progress: 100 };
+              }
+              if ((ct.progress || 0) >= (prev.progress || 0)) {
+                return ct;
+              }
+              return prevIsCompleted ? prev : ct;
+            }
+            return ct;
+          });
+          return applyWbsRollups(merged);
+        });
+      }
+      if (cloudData.milestones && cloudData.milestones.length > 0) setMilestones(cloudData.milestones);
+      if (cloudData.teamMembers && cloudData.teamMembers.length > 0) setTeamMembers(cloudData.teamMembers);
+      if (cloudData.risks && cloudData.risks.length > 0) setRisks(cloudData.risks);
+      if (cloudData.logs && cloudData.logs.length > 0) setLogs(cloudData.logs);
+      setLastSyncTime(new Date().toLocaleTimeString());
+    });
+
+    return () => unsubscribe();
+  }, [spreadsheetId]);
+
+  // Initial load and background polling every 15 seconds to auto-sync team progress updates from Google Sheets
   useEffect(() => {
     if (spreadsheetId) {
       loadDatabaseValues(accessToken || '', spreadsheetId);
+
+      const intervalId = setInterval(() => {
+        if (!document.hidden) {
+          loadDatabaseValues(accessToken || '', spreadsheetId, true);
+        }
+      }, 15000);
+
+      return () => clearInterval(intervalId);
     }
   }, [accessToken, spreadsheetId, loadDatabaseValues]);
 
@@ -422,6 +521,7 @@ export default function App() {
     };
     if (spreadsheetId) {
       localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
+      saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
     }
 
     if (!accessToken || !spreadsheetId) return;
@@ -442,41 +542,12 @@ export default function App() {
       const is403 = errMsg.includes('403') || errMsg.includes('permission') || errMsg.includes('Permission') || errMsg.includes('does not have permission');
 
       if (is403 && accessToken) {
-        try {
-          console.log('403 Permission Denied on current sheet. Auto-creating personal Google Sheet in user Drive...');
-          const newSheet = await initializeSpreadsheet(
-            accessToken,
-            projectName || 'Master Control Plan',
-            'Master Control Plan Project Database',
-            folderId || DEFAULT_DRIVE_FOLDER_ID
-          );
-
-          const newSheetId = newSheet.spreadsheetId;
-          setSpreadsheetId(newSheetId);
-          localStorage.setItem('mcp_spreadsheet_id', newSheetId);
-          localStorage.setItem(`mcp_cache_${newSheetId}`, JSON.stringify(cacheData));
-
-          // Save to newly created sheet
-          await saveProjectData(accessToken, newSheetId, {
-            tasks: updatedTasks,
-            milestones: updatedMilestones,
-            teamMembers: updatedTeam,
-            risks: updatedRisks,
-            logs: updatedLogs
-          });
-
-          setLastSyncTime(new Date().toLocaleTimeString());
-
-          setConfirmState({
-            isOpen: true,
-            title: 'Google Sheet Pribadi Otomatis Dibuat',
-            message: `Spreadsheet sebelumnya bersifat Read-Only atau tidak memiliki izin akses (403 Permission Denied).\n\nAplikasi telah otomatis membuat file Google Sheet baru di Google Drive Anda:\n- Title: Master Control Plan (MCP) - ${projectName || 'BRIN'}\n- ID: ${newSheetId}\n\nSeluruh data Task, Priority, Risk, dan Tim Anda telah tersimpan dengan aman ke Google Drive pribadi Anda!`,
-            onConfirm: () => setConfirmState(prev => ({ ...prev, isOpen: false }))
-          });
-          return;
-        } catch (createErr: any) {
-          console.error('Failed to auto-create personal sheet:', createErr);
-        }
+        setConfirmState({
+          isOpen: true,
+          title: 'Izin Akses Edit Google Sheet Ditolak (403)',
+          message: `Sistem mencoba menyimpan perubahan ke Google Sheet Utama (${spreadsheetId}), namun akun Google Anda (${user?.email || ''}) belum diberikan akses Editor.\n\n- Data perubahan Anda tetap tersimpan aman di browser lokal.\n- Minta pemilik Google Sheet (madeflora.com@gmail.com) memberikan akses "Editor" ke email Anda agar sync tim berjalan lancar.`,
+          onConfirm: () => setConfirmState(prev => ({ ...prev, isOpen: false }))
+        });
       }
 
       console.warn('Data is saved in local browser storage. Google Sheets sync notice:', errMsg);
@@ -709,10 +780,10 @@ export default function App() {
     saveDatabaseValues(updatedTasks, milestones, teamMembers, risks, logs);
   };
 
-  // Manual pull/sync
+  // Manual pull/sync from Google Sheets
   const handleManualSync = () => {
-    if (accessToken && spreadsheetId) {
-      loadDatabaseValues(accessToken, spreadsheetId);
+    if (spreadsheetId) {
+      loadDatabaseValues(accessToken || '', spreadsheetId, false);
     }
   };
 
@@ -964,11 +1035,21 @@ export default function App() {
             {isSyncing && (
               <span className="text-[10px] bg-amber-500/10 text-amber-700 border border-amber-500/20 px-3 py-1.5 rounded-lg font-mono font-bold flex items-center gap-1.5">
                 <Loader2 className="h-3 w-3 animate-spin text-amber-600" />
-                Auto-Saving Sheets
+                Auto-Saving
               </span>
             )}
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              className="text-[11px] bg-white hover:bg-slate-100 text-slate-700 active:scale-95 px-3 py-1.5 rounded-lg border border-slate-200/80 font-semibold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+              title="Tarik Perubahan Terbaru dari Google Sheets (Galih / Tim)"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>Sync Data Terbaru</span>
+            </button>
             {lastSyncTime && !isSyncing && (
-              <span className="text-[10px] bg-white text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200/80 font-mono font-bold">
+              <span className="text-[10px] bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200/80 font-mono font-bold">
                 Saved: {lastSyncTime}
               </span>
             )}

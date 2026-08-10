@@ -46,12 +46,16 @@ export default function KanbanBoard({ tasks, teamMembers, onUpdateTask, accessTo
     };
 
     tasks.forEach(t => {
-      const statusKey = (t.status === 'Not Started' || !t.status) ? 'To Do' : t.status;
-      if (data[statusKey] !== undefined) {
+      const prog = t.progress || 0;
+      const rawStatus = (t.status || '').toString().trim().toLowerCase();
+      const isCompleted = t.status === 'Completed' || prog === 100 || rawStatus === 'selesai' || rawStatus === 'done' || rawStatus === 'finished';
+      const isInProgress = !isCompleted && (t.status === 'In Progress' || prog > 0 || rawStatus === 'dalam pengerjaan' || rawStatus === 'sedang berjalan' || rawStatus === 'in_progress');
+
+      const statusKey = isCompleted ? 'Completed' : isInProgress ? 'In Progress' : 'To Do';
+      if (data[statusKey]) {
         data[statusKey].tasks.push(t);
         data[statusKey].budget += t.budget || 0;
       } else {
-        // Fallback for unknown status
         data['To Do'].tasks.push(t);
         data['To Do'].budget += t.budget || 0;
       }
@@ -67,7 +71,12 @@ export default function KanbanBoard({ tasks, teamMembers, onUpdateTask, accessTo
 
   // Handle shifting cards left/right
   const shiftStatus = (task: Task, direction: 'left' | 'right') => {
-    const currentIndex = COLUMNS.indexOf(task.status);
+    const rawStatus = (task.status || '').toString().trim().toLowerCase();
+    const isCompleted = task.status === 'Completed' || task.progress === 100 || rawStatus === 'selesai' || rawStatus === 'done';
+    const isInProgress = !isCompleted && (task.status === 'In Progress' || (task.progress || 0) > 0 || rawStatus === 'dalam pengerjaan' || rawStatus === 'sedang berjalan');
+    const currentStatus: TaskStatus = isCompleted ? 'Completed' : isInProgress ? 'In Progress' : 'To Do';
+
+    const currentIndex = COLUMNS.indexOf(currentStatus);
     let nextIndex = currentIndex;
     
     if (direction === 'left' && currentIndex > 0) {
@@ -83,14 +92,19 @@ export default function KanbanBoard({ tasks, teamMembers, onUpdateTask, accessTo
         type: 'status_change',
         user: 'You',
         timestamp: 'Just now',
-        fromStatus: task.status,
+        fromStatus: currentStatus,
         toStatus: nextStatus
       };
+
+      let newProgress = task.progress || 0;
+      if (nextStatus === 'Completed') newProgress = 100;
+      else if (nextStatus === 'To Do') newProgress = 0;
+      else if (nextStatus === 'In Progress' && (newProgress === 0 || newProgress === 100)) newProgress = 50;
 
       onUpdateTask({
         ...task,
         status: nextStatus,
-        progress: nextStatus === 'Completed' ? 100 : task.progress,
+        progress: newProgress,
         activities: [newAct, ...(task.activities || [])]
       });
     }
