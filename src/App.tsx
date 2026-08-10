@@ -24,7 +24,8 @@ import {
   Risk, 
   ActivityLog, 
   TaskStatus, 
-  RiskLevel
+  RiskLevel,
+  DriveFile
 } from './types';
 import { 
   Loader2, 
@@ -124,6 +125,7 @@ export default function App() {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>(INITIAL_BRIN_TEAM);
   const [risks, setRisks] = useState<Risk[]>(INITIAL_BRIN_RISKS);
   const [logs, setLogs] = useState<ActivityLog[]>(INITIAL_BRIN_LOGS);
+  const [documents, setDocuments] = useState<DriveFile[]>([]);
   const [config, setConfig] = useState<Record<string, string>>({});
 
   // Loading and Syncer state
@@ -189,6 +191,9 @@ export default function App() {
         }
         if (cached.logs && Array.isArray(cached.logs)) {
           setLogs(cached.logs);
+        }
+        if (cached.documents && Array.isArray(cached.documents)) {
+          setDocuments(cached.documents);
         }
       } catch (e) {
         console.error('Error reading initial local cache:', e);
@@ -332,12 +337,17 @@ export default function App() {
         ? firestoreData.logs
         : ((dataResult.logs && dataResult.logs.length > 0) ? dataResult.logs : INITIAL_BRIN_LOGS);
 
+      let effectiveDocuments = (firestoreData?.documents && firestoreData.documents.length > 0)
+        ? firestoreData.documents
+        : (cachedStr ? (JSON.parse(cachedStr)?.documents || []) : []);
+
       const rolledUpTasks = applyWbsRollups(effectiveTasks);
       setTasks(rolledUpTasks);
       setMilestones(effectiveMilestones);
       setTeamMembers(effectiveTeam);
       setRisks(effectiveRisks);
       setLogs(effectiveLogs);
+      setDocuments(effectiveDocuments);
       setConfig(dataResult.config || {});
       setLastSyncTime(new Date().toLocaleTimeString());
 
@@ -348,6 +358,7 @@ export default function App() {
         teamMembers: effectiveTeam,
         risks: effectiveRisks,
         logs: effectiveLogs,
+        documents: effectiveDocuments,
         timestamp: new Date().toISOString()
       };
       localStorage.setItem(`mcp_cache_${sheetId}`, JSON.stringify(updatedCache));
@@ -434,6 +445,7 @@ export default function App() {
       if (cloudData.teamMembers && cloudData.teamMembers.length > 0) setTeamMembers(cloudData.teamMembers);
       if (cloudData.risks && cloudData.risks.length > 0) setRisks(cloudData.risks);
       if (cloudData.logs && cloudData.logs.length > 0) setLogs(cloudData.logs);
+      if (cloudData.documents && Array.isArray(cloudData.documents)) setDocuments(cloudData.documents);
       setLastSyncTime(new Date().toLocaleTimeString());
     });
 
@@ -533,6 +545,7 @@ export default function App() {
       teamMembers: updatedTeam,
       risks: updatedRisks,
       logs: updatedLogs,
+      documents,
       timestamp: new Date().toISOString()
     };
     if (spreadsheetId) {
@@ -785,6 +798,28 @@ export default function App() {
   };
 
   // ================= DOCUMENT ATTACHMENT MUTATIONS =================
+  const handleAddDocument = (newDoc: DriveFile) => {
+    setDocuments(prev => {
+      const exists = prev.some(d => d.id === newDoc.id || (d.webViewLink && d.webViewLink === newDoc.webViewLink));
+      if (exists) return prev;
+      const updated = [newDoc, ...prev];
+      const cacheData = {
+        tasks,
+        milestones,
+        teamMembers,
+        risks,
+        logs,
+        documents: updated,
+        timestamp: new Date().toISOString()
+      };
+      if (spreadsheetId) {
+        localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
+        saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
+      }
+      return updated;
+    });
+  };
+
   const handleLinkAttachmentToTask = (taskId: string, attachmentUrl: string) => {
     const updatedTasks = tasks.map(t => {
       if (t.id === taskId) {
@@ -1130,6 +1165,8 @@ export default function App() {
                 accessToken={accessToken!}
                 folderId={folderId!}
                 tasks={tasks}
+                syncedDocuments={documents}
+                onAddDocument={handleAddDocument}
                 onLinkAttachmentToTask={handleLinkAttachmentToTask}
                 onAddLog={addLogEntry}
               />

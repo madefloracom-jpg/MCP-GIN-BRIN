@@ -25,29 +25,24 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { uploadFileToDrive, listDriveFolderFiles, deleteDriveFile } from '../lib/googleApi';
-import { Task } from '../types';
+import { Task, DriveFile } from '../types';
 
 interface DocumentManagerProps {
   accessToken: string;
   folderId: string;
   tasks: Task[];
+  syncedDocuments?: DriveFile[];
+  onAddDocument?: (doc: DriveFile) => void;
   onLinkAttachmentToTask: (taskId: string, attachmentUrl: string) => void;
   onAddLog: (action: string, details: string) => void;
-}
-
-interface DriveFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  webViewLink: string;
-  size?: string;
-  createdTime: string;
 }
 
 export default function DocumentManager({ 
   accessToken, 
   folderId, 
   tasks, 
+  syncedDocuments = [],
+  onAddDocument,
   onLinkAttachmentToTask,
   onAddLog
 }: DocumentManagerProps) {
@@ -69,14 +64,18 @@ export default function DocumentManager({
 
   useEffect(() => {
     fetchFolderFiles();
-  }, [folderId]);
+  }, [folderId, accessToken]);
 
   const fetchFolderFiles = async () => {
     setIsLoading(true);
     setListError(null);
     try {
-      const driveFiles = await listDriveFolderFiles(accessToken, folderId);
-      setFiles(driveFiles);
+      if (accessToken && folderId) {
+        const driveFiles = await listDriveFolderFiles(accessToken, folderId);
+        setFiles(driveFiles);
+      } else {
+        setFiles([]);
+      }
     } catch (err: any) {
       console.error('Failed to list files:', err);
       setListError(err);
@@ -94,7 +93,19 @@ export default function DocumentManager({
     setUploadError(null);
     try {
       const result = await uploadFileToDrive(accessToken, folderId, targetFile);
+      const newDoc: DriveFile = {
+        id: result.fileId || `doc-${Date.now()}`,
+        name: result.fileName || targetFile.name,
+        mimeType: targetFile.type || 'application/octet-stream',
+        webViewLink: result.webViewLink,
+        size: String(targetFile.size),
+        createdTime: new Date().toISOString()
+      };
+
       onAddLog('Document Upload', `Uploaded file "${targetFile.name}" directly to project Google Drive attachments folder.`);
+      if (onAddDocument) {
+        onAddDocument(newDoc);
+      }
       await fetchFolderFiles();
     } catch (err: any) {
       console.error('Upload error:', err);
@@ -104,6 +115,91 @@ export default function DocumentManager({
       e.target.value = '';
     }
   };
+
+  // Extract all task attachments and activity attachments from tasks prop
+  const taskAttachments: DriveFile[] = React.useMemo(() => {
+    const result: DriveFile[] = [];
+    (tasks || []).forEach(t => {
+      if (t.attachmentUrl && t.attachmentUrl.trim() !== '') {
+        const lower = t.attachmentUrl.toLowerCase();
+        let mime = 'application/octet-stream';
+        if (lower.includes('.pdf')) mime = 'application/pdf';
+        else if (lower.includes('.png') || lower.includes('.jpg') || lower.includes('.jpeg')) mime = 'image/png';
+        else if (lower.includes('spreadsheet') || lower.includes('.csv') || lower.includes('.xlsx')) mime = 'application/vnd.google-apps.spreadsheet';
+
+        result.push({
+          id: `task-att-${t.id}`,
+          name: `[${t.wbs}] ${t.name} (Lampiran Tugas)`,
+          mimeType: mime,
+          webViewLink: t.attachmentUrl,
+          size: 'Task Link',
+          createdTime: new Date().toISOString()
+        });
+      }
+
+      if (t.activities && Array.isArray(t.activities)) {
+        t.activities.forEach(act => {
+          if (act.attachmentUrl && act.attachmentUrl.trim() !== '') {
+            result.push({
+              id: `act-att-${act.id}`,
+              name: act.attachmentName || `[${t.wbs}] Lampiran Aktivitas`,
+              mimeType: 'application/octet-stream',
+              webViewLink: act.attachmentUrl,
+              size: 'Aktivitas',
+              createdTime: act.timestamp || new Date().toISOString()
+            });
+          }
+          if (act.attachments && Array.isArray(act.attachments)) {
+            act.attachments.forEach((att, idx) => {
+              if (att.url && att.url.trim() !== '') {
+                result.push({
+                  id: `act-att-${act.id}-${idx}`,
+                  name: att.name || `[${t.wbs}] Lampiran Aktivitas #${idx + 1}`,
+                  mimeType: 'application/octet-stream',
+                  webViewLink: att.url,
+                  size: 'Aktivitas',
+                  createdTime: act.timestamp || new Date().toISOString()
+                });
+              }
+            });
+          }
+        });
+      }
+    });
+    return result;
+  }, [tasks]);
+
+  // Combine files from Drive API, synced documents from Firestore, and task attachments
+  const allFiles = React.useMemo(() => {
+    const map = new Map<string, DriveFile>();
+
+    // 1. Files from Drive API
+    files.forEach(f => {
+      const key = f.webViewLink || f.id;
+      if (key) map.set(key, f);
+    });
+
+    // 2. Synced documents from Firestore / App state
+    (syncedDocuments || []).forEach(sd => {
+      const key = sd.webViewLink || sd.id;
+      if (key && !map.has(key)) {
+        map.set(key, sd);
+      }
+    });
+
+    // 3. Task attachments
+    taskAttachments.forEach(ta => {
+      if (ta.webViewLink && !map.has(ta.webViewLink)) {
+        map.set(ta.webViewLink, ta);
+      }
+    });
+
+    return Array.from(map.values());
+  }, [files, syncedDocuments, taskAttachments]);
+
+  const filteredFiles = allFiles.filter(f => 
+    f.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const renderDriveErrorNotice = (err: any) => {
     if (!err) return null;
@@ -226,10 +322,6 @@ export default function DocumentManager({
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
-
-  const filteredFiles = files.filter(f => 
-    f.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

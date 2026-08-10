@@ -5,7 +5,7 @@
 
 import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { db } from './firebase';
-import { Task, Milestone, TeamMember, Risk, ActivityLog } from '../types';
+import { Task, Milestone, TeamMember, Risk, ActivityLog, DriveFile } from '../types';
 
 export interface ProjectCloudData {
   tasks: Task[];
@@ -13,6 +13,7 @@ export interface ProjectCloudData {
   teamMembers: TeamMember[];
   risks: Risk[];
   logs: ActivityLog[];
+  documents?: DriveFile[];
   lastUpdated?: string;
   updatedBy?: string;
 }

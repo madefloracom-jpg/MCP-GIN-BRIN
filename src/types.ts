@@ -126,3 +126,12 @@ export interface MCPProject {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface DriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  webViewLink: string;
+  size?: string;
+  createdTime: string;
+}
