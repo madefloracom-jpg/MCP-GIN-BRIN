@@ -198,37 +198,48 @@ export default function DocumentManager({
     return result;
   }, [tasks]);
 
-  // Combine files from Drive API, synced documents from Firestore, and task attachments
+  // Combine files from Drive API, synced documents from Firestore, and task attachments with strict deduplication
   const allFiles = React.useMemo(() => {
-    const map = new Map<string, DriveFile>();
+    const list: DriveFile[] = [];
+
+    const isSameFile = (a: DriveFile, b: DriveFile) => {
+      if (a.id && b.id && a.id === b.id) return true;
+      if (a.webViewLink && b.webViewLink && a.webViewLink === b.webViewLink) return true;
+      if (a.id && b.webViewLink && b.webViewLink.includes(a.id)) return true;
+      if (b.id && a.webViewLink && a.webViewLink.includes(b.id)) return true;
+      if (a.name && b.name && a.name === b.name && (a.size === b.size || a.mimeType === b.mimeType)) return true;
+      return false;
+    };
+
+    const isDeleted = (doc: DriveFile) => {
+      if (deletedKeys.has(doc.id)) return true;
+      if (doc.webViewLink && deletedKeys.has(doc.webViewLink)) return true;
+      for (const k of deletedKeys) {
+        if (doc.id && k.includes(doc.id)) return true;
+        if (doc.webViewLink && doc.webViewLink.includes(k)) return true;
+        if (doc.id && k === doc.id) return true;
+      }
+      return false;
+    };
+
+    const addIfUnique = (doc: DriveFile) => {
+      if (!doc || isDeleted(doc)) return;
+      const exists = list.some(item => isSameFile(item, doc));
+      if (!exists) {
+        list.push(doc);
+      }
+    };
 
     // 1. Files from Drive API
-    files.forEach(f => {
-      const key = f.id || f.webViewLink;
-      if (key) map.set(key, f);
-    });
+    files.forEach(f => addIfUnique(f));
 
     // 2. Synced documents from Firestore / App state
-    (syncedDocuments || []).forEach(sd => {
-      const key = sd.id || sd.webViewLink;
-      if (key && !map.has(key)) {
-        map.set(key, sd);
-      }
-    });
+    (syncedDocuments || []).forEach(sd => addIfUnique(sd));
 
     // 3. Task attachments
-    taskAttachments.forEach(ta => {
-      const key = ta.id || ta.webViewLink;
-      if (key && !map.has(key)) {
-        map.set(key, ta);
-      }
-    });
+    taskAttachments.forEach(ta => addIfUnique(ta));
 
-    return Array.from(map.values()).filter(f => {
-      if (deletedKeys.has(f.id)) return false;
-      if (f.webViewLink && deletedKeys.has(f.webViewLink)) return false;
-      return true;
-    });
+    return list;
   }, [files, syncedDocuments, taskAttachments, deletedKeys]);
 
   const filteredFiles = allFiles.filter(f => 

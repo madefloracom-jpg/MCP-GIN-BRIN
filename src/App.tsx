@@ -934,7 +934,13 @@ export default function App() {
       let changed = false;
       const updated = [...prev];
       docsToAdd.forEach(newDoc => {
-        const exists = updated.some(d => d.id === newDoc.id || (d.webViewLink && newDoc.webViewLink && d.webViewLink === newDoc.webViewLink));
+        const exists = updated.some(d => 
+          d.id === newDoc.id || 
+          (d.webViewLink && newDoc.webViewLink && d.webViewLink === newDoc.webViewLink) ||
+          (newDoc.id && d.webViewLink && d.webViewLink.includes(newDoc.id)) ||
+          (d.id && newDoc.webViewLink && newDoc.webViewLink.includes(d.id)) ||
+          (d.name === newDoc.name)
+        );
         if (!exists) {
           updated.unshift(newDoc);
           changed = true;
@@ -963,7 +969,12 @@ export default function App() {
   const handleDeleteDocument = (docId: string, webViewLink?: string) => {
     let tasksChanged = false;
     const updatedTasks = tasks.map(t => {
-      if (t.attachmentUrl && (t.attachmentUrl === webViewLink || t.attachmentUrl === docId || (docId && t.attachmentUrl.includes(docId)))) {
+      if (t.attachmentUrl && (
+        t.attachmentUrl === webViewLink || 
+        t.attachmentUrl === docId || 
+        (docId && t.attachmentUrl.includes(docId)) ||
+        (webViewLink && t.attachmentUrl.includes(webViewLink))
+      )) {
         tasksChanged = true;
         return { ...t, attachmentUrl: undefined };
       }
@@ -975,7 +986,12 @@ export default function App() {
     }
 
     setDocuments(prev => {
-      const updated = prev.filter(d => d.id !== docId && (!webViewLink || d.webViewLink !== webViewLink));
+      const updated = prev.filter(d => 
+        d.id !== docId && 
+        (!webViewLink || d.webViewLink !== webViewLink) &&
+        !(docId && d.webViewLink && d.webViewLink.includes(docId)) &&
+        !(d.id && webViewLink && webViewLink.includes(d.id))
+      );
       const cacheData = {
         tasks: tasksChanged ? updatedTasks : tasks,
         milestones,
