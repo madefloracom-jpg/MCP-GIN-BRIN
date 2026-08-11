@@ -40,26 +40,102 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+// Helper to check if a status string represents completed
+function isRawCompleted(status?: string): boolean {
+  if (!status) return false;
+  const raw = status.toString().trim().toLowerCase();
+  return raw === 'completed' || raw === 'selesai' || raw === 'done' || raw === 'finished';
+}
+
+// Helper to merge subtasks preserving completed states
+function mergeSubtasksList(baseSubs: any[] = [], incSubs: any[] = []): any[] {
+  const map = new Map<string, any>();
+  (baseSubs || []).forEach(s => map.set(s.id, { ...s }));
+  (incSubs || []).forEach(inc => {
+    const existing = map.get(inc.id);
+    if (!existing) {
+      map.set(inc.id, { ...inc });
+    } else {
+      map.set(inc.id, {
+        ...existing,
+        ...inc,
+        completed: existing.completed || inc.completed,
+      });
+    }
+  });
+  return Array.from(map.values());
+}
+
+// Helper to merge checklists preserving completed states
+function mergeChecklistsList(baseLists: any[] = [], incLists: any[] = []): any[] {
+  const map = new Map<string, any>();
+  (baseLists || []).forEach(c => map.set(c.id, { ...c }));
+  (incLists || []).forEach(inc => {
+    const existing = map.get(inc.id);
+    if (!existing) {
+      map.set(inc.id, { ...inc });
+    } else {
+      const itemMap = new Map<string, any>();
+      (existing.items || []).forEach(it => itemMap.set(it.id, { ...it }));
+      (inc.items || []).forEach(it => {
+        const prevIt = itemMap.get(it.id);
+        if (!prevIt) {
+          itemMap.set(it.id, { ...it });
+        } else {
+          itemMap.set(it.id, {
+            ...prevIt,
+            ...it,
+            completed: prevIt.completed || it.completed,
+          });
+        }
+      });
+      map.set(inc.id, {
+        ...existing,
+        ...inc,
+        items: Array.from(itemMap.values()),
+      });
+    }
+  });
+  return Array.from(map.values());
+}
+
 // Helper to merge two task objects preserving user inputs, subtasks, checklists, and status
 function mergeTaskObjects(base: Task, incoming: Task): Task {
-  let status: TaskStatus = incoming.status || base.status || 'To Do';
-  let progress: number = incoming.progress !== undefined ? incoming.progress : (base.progress || 0);
+  const baseCompleted = base.progress === 100 || base.status === 'Completed' || isRawCompleted(base.status);
+  const incCompleted = incoming.progress === 100 || incoming.status === 'Completed' || isRawCompleted(incoming.status);
+  const isCompleted = baseCompleted || incCompleted;
 
-  const rawStatus = (status || '').toString().trim().toLowerCase();
-  if (progress === 100 || status === 'Completed' || rawStatus === 'selesai' || rawStatus === 'done' || rawStatus === 'finished') {
+  let progress = Math.max(base.progress || 0, incoming.progress || 0);
+  let status: TaskStatus;
+
+  if (isCompleted) {
     status = 'Completed';
     progress = 100;
   } else if (progress > 0) {
     status = 'In Progress';
-  } else if (progress === 0 && status !== 'In Progress') {
+  } else if (incoming.status === 'In Progress' || base.status === 'In Progress') {
+    status = 'In Progress';
+  } else {
     status = 'To Do';
   }
 
-  const subtasks = (incoming.subtasks && incoming.subtasks.length > 0) ? incoming.subtasks : (base.subtasks || []);
-  const checklists = (incoming.checklists && incoming.checklists.length > 0) ? incoming.checklists : (base.checklists || []);
-  const activities = (incoming.activities && incoming.activities.length > 0) ? incoming.activities : (base.activities || []);
-  const agendas = (incoming.agendas && incoming.agendas.length > 0) ? incoming.agendas : (base.agendas || []);
-  const assignees = (incoming.assignees && incoming.assignees.length > 0) ? incoming.assignees : (base.assignees || []);
+  const subtasks = mergeSubtasksList(base.subtasks, incoming.subtasks);
+  const checklists = mergeChecklistsList(base.checklists, incoming.checklists);
+
+  const actMap = new Map<string, any>();
+  (base.activities || []).forEach(a => { if (a && a.id) actMap.set(a.id, a); });
+  (incoming.activities || []).forEach(a => { if (a && a.id) actMap.set(a.id, a); });
+  const activities = Array.from(actMap.values()).sort((a, b) => 
+    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+
+  const agendaMap = new Map<string, any>();
+  (base.agendas || []).forEach(ag => { if (ag && ag.id) agendaMap.set(ag.id, ag); });
+  (incoming.agendas || []).forEach(ag => { if (ag && ag.id) agendaMap.set(ag.id, ag); });
+  const agendas = Array.from(agendaMap.values());
+
+  const assigneeSet = new Set<string>([...(base.assignees || []), ...(incoming.assignees || [])]);
+  const assignees = Array.from(assigneeSet);
 
   return {
     ...base,
@@ -73,6 +149,7 @@ function mergeTaskObjects(base: Task, incoming: Task): Task {
     budget: incoming.budget !== undefined ? incoming.budget : base.budget,
     actualCost: incoming.actualCost !== undefined ? incoming.actualCost : base.actualCost,
     notes: incoming.notes || base.notes,
+    attachmentUrl: incoming.attachmentUrl || base.attachmentUrl,
     subtasks,
     checklists,
     activities,
@@ -275,19 +352,7 @@ export default function App() {
         agendas: st.agendas || [],
       }));
 
-      // B. Merge Firestore tasks (contains team real-time updates across all users)
-      if (firestoreData?.tasks && Array.isArray(firestoreData.tasks)) {
-        firestoreData.tasks.forEach((ft: Task) => {
-          const existing = taskMap.get(ft.id);
-          if (!existing) {
-            taskMap.set(ft.id, ft);
-          } else {
-            taskMap.set(ft.id, mergeTaskObjects(existing, ft));
-          }
-        });
-      }
-
-      // C. Merge local cache tasks
+      // B. Merge local cache tasks over initial/sheet tasks
       if (cachedStr) {
         try {
           const cached = JSON.parse(cachedStr);
@@ -304,6 +369,18 @@ export default function App() {
         } catch (e) {
           console.error('Error parsing local cache merge:', e);
         }
+      }
+
+      // C. Merge Firestore tasks (contains shared real-time team updates) over local cache
+      if (firestoreData?.tasks && Array.isArray(firestoreData.tasks)) {
+        firestoreData.tasks.forEach((ft: Task) => {
+          const existing = taskMap.get(ft.id);
+          if (!existing) {
+            taskMap.set(ft.id, ft);
+          } else {
+            taskMap.set(ft.id, mergeTaskObjects(existing, ft));
+          }
+        });
       }
 
       let effectiveTasks = Array.from(taskMap.values());
