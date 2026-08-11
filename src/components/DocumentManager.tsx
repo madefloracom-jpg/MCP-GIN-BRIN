@@ -38,6 +38,44 @@ interface DocumentManagerProps {
   onAddLog: (action: string, details: string) => void;
 }
 
+export function extractDriveId(str?: string): string {
+  if (!str) return '';
+  const clean = str.trim();
+  const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (dMatch && dMatch[1]) return dMatch[1];
+  const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idMatch && idMatch[1]) return idMatch[1];
+  return clean;
+}
+
+export function isSameDriveFile(a: DriveFile, b: DriveFile): boolean {
+  if (!a || !b) return false;
+  const idA = extractDriveId(a.id) || extractDriveId(a.webViewLink);
+  const idB = extractDriveId(b.id) || extractDriveId(b.webViewLink);
+  if (idA && idB && idA === idB) return true;
+  if (a.webViewLink && b.webViewLink && a.webViewLink === b.webViewLink) return true;
+  if (a.name && b.name && a.name === b.name && (a.size === b.size || a.mimeType === b.mimeType)) return true;
+  return false;
+}
+
+export function isDeletedDriveFile(doc: DriveFile, deletedKeys: Set<string>): boolean {
+  if (!doc) return false;
+  const docId = doc.id;
+  const webLink = doc.webViewLink;
+  const driveId = extractDriveId(docId) || extractDriveId(webLink);
+
+  if (docId && deletedKeys.has(docId)) return true;
+  if (webLink && deletedKeys.has(webLink)) return true;
+  if (driveId && deletedKeys.has(driveId)) return true;
+
+  for (const k of deletedKeys) {
+    if (docId && (docId.includes(k) || k.includes(docId))) return true;
+    if (webLink && (webLink.includes(k) || k.includes(webLink))) return true;
+    if (driveId && (driveId.includes(k) || k.includes(driveId))) return true;
+  }
+  return false;
+}
+
 export default function DocumentManager({ 
   accessToken, 
   folderId, 
@@ -49,7 +87,14 @@ export default function DocumentManager({
   onAddLog
 }: DocumentManagerProps) {
   const [files, setFiles] = useState<DriveFile[]>([]);
-  const [deletedKeys, setDeletedKeys] = useState<Set<string>>(new Set());
+  const [deletedKeys, setDeletedKeys] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem('mcp_deleted_docs');
+      return stored ? new Set(JSON.parse(stored)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
@@ -65,6 +110,22 @@ export default function DocumentManager({
   const [selectedFileToLink, setSelectedFileToLink] = useState<DriveFile | null>(null);
   const [targetTaskId, setTargetTaskId] = useState<string>('');
 
+  const markKeyDeleted = (key: string) => {
+    if (!key) return;
+    setDeletedKeys(prev => {
+      const next = new Set(prev);
+      const driveId = extractDriveId(key);
+      next.add(key);
+      if (driveId) next.add(driveId);
+      try {
+        localStorage.setItem('mcp_deleted_docs', JSON.stringify(Array.from(next)));
+      } catch (e) {
+        console.warn('Failed to save deleted docs to localStorage:', e);
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     fetchFolderFiles();
   }, [folderId, accessToken]);
@@ -75,9 +136,12 @@ export default function DocumentManager({
     try {
       if (accessToken && folderId) {
         const driveFiles = await listDriveFolderFiles(accessToken, folderId);
-        setFiles(driveFiles);
-        if (driveFiles.length > 0 && onAddDocument) {
-          onAddDocument(driveFiles);
+        const validDriveFiles = driveFiles.filter(f => !isDeletedDriveFile(f, deletedKeys));
+        setFiles(validDriveFiles);
+
+        // Only sync drive files to Firestore if syncedDocuments is completely uninitialized
+        if (validDriveFiles.length > 0 && (!syncedDocuments || syncedDocuments.length === 0) && onAddDocument) {
+          onAddDocument(validDriveFiles);
         }
       } else {
         setFiles([]);
@@ -124,7 +188,7 @@ export default function DocumentManager({
       };
 
       // Add to local state immediately
-      setFiles(prev => [newDoc, ...prev.filter(f => f.id !== newDoc.id)]);
+      setFiles(prev => [newDoc, ...prev.filter(f => !isSameDriveFile(f, newDoc))]);
 
       // Sync across team via Firestore & localStorage mcp_cache
       if (onAddDocument) {
@@ -132,10 +196,6 @@ export default function DocumentManager({
       }
 
       onAddLog('Document Upload', `Uploaded file "${docName}" to project attachments.`);
-
-      if (accessToken && folderId && driveResult) {
-        await fetchFolderFiles();
-      }
     } catch (err: any) {
       console.error('Upload handling error:', err);
       setUploadError(err);
@@ -198,46 +258,28 @@ export default function DocumentManager({
     return result;
   }, [tasks]);
 
-  // Combine files from Drive API, synced documents from Firestore, and task attachments with strict deduplication
+  // Combine files from Firestore (syncedDocuments), task attachments, and Drive API with strict deduplication
   const allFiles = React.useMemo(() => {
     const list: DriveFile[] = [];
 
-    const isSameFile = (a: DriveFile, b: DriveFile) => {
-      if (a.id && b.id && a.id === b.id) return true;
-      if (a.webViewLink && b.webViewLink && a.webViewLink === b.webViewLink) return true;
-      if (a.id && b.webViewLink && b.webViewLink.includes(a.id)) return true;
-      if (b.id && a.webViewLink && a.webViewLink.includes(b.id)) return true;
-      if (a.name && b.name && a.name === b.name && (a.size === b.size || a.mimeType === b.mimeType)) return true;
-      return false;
-    };
-
-    const isDeleted = (doc: DriveFile) => {
-      if (deletedKeys.has(doc.id)) return true;
-      if (doc.webViewLink && deletedKeys.has(doc.webViewLink)) return true;
-      for (const k of deletedKeys) {
-        if (doc.id && k.includes(doc.id)) return true;
-        if (doc.webViewLink && doc.webViewLink.includes(k)) return true;
-        if (doc.id && k === doc.id) return true;
-      }
-      return false;
-    };
-
     const addIfUnique = (doc: DriveFile) => {
-      if (!doc || isDeleted(doc)) return;
-      const exists = list.some(item => isSameFile(item, doc));
+      if (!doc || isDeletedDriveFile(doc, deletedKeys)) return;
+      const exists = list.some(item => isSameDriveFile(item, doc));
       if (!exists) {
         list.push(doc);
       }
     };
 
-    // 1. Files from Drive API
-    files.forEach(f => addIfUnique(f));
-
-    // 2. Synced documents from Firestore / App state
+    // 1. Primary source: Synced documents from Firestore (SSOT for all users)
     (syncedDocuments || []).forEach(sd => addIfUnique(sd));
 
-    // 3. Task attachments
+    // 2. Secondary source: Task attachments
     taskAttachments.forEach(ta => addIfUnique(ta));
+
+    // 3. Tertiary source: Files from Drive API (only if syncedDocuments is uninitialized)
+    if (!syncedDocuments || syncedDocuments.length === 0) {
+      files.forEach(f => addIfUnique(f));
+    }
 
     return list;
   }, [files, syncedDocuments, taskAttachments, deletedKeys]);
@@ -311,16 +353,14 @@ export default function DocumentManager({
     setDeleteError(null);
     setUploadError(null);
 
-    // Track in deletedKeys to guarantee it vanishes from UI list
-    setDeletedKeys(prev => {
-      const next = new Set(prev);
-      if (fileId) next.add(fileId);
-      if (webViewLink) next.add(webViewLink);
-      return next;
-    });
+    // Track in deletedKeys & localStorage to guarantee it vanishes from UI list permanently
+    if (fileId) markKeyDeleted(fileId);
+    if (webViewLink) markKeyDeleted(webViewLink);
+    const driveId = extractDriveId(fileId) || extractDriveId(webViewLink);
+    if (driveId) markKeyDeleted(driveId);
 
-    // Remove from local files state
-    setFiles(prev => prev.filter(f => f.id !== fileId && (!webViewLink || f.webViewLink !== webViewLink)));
+    // Remove from local files state immediately
+    setFiles(prev => prev.filter(f => !isSameDriveFile(f, fileToDelete)));
 
     // Remove from App state & Firestore & localStorage mcp_cache
     if (onDeleteDocument) {
@@ -334,9 +374,6 @@ export default function DocumentManager({
       }
       onAddLog('Document Delete', `Menghapus berkas "${fileName}" dari lampiran proyek.`);
       setFileToDelete(null);
-      if (!isVirtualId && accessToken && folderId) {
-        await fetchFolderFiles();
-      }
     } catch (err: any) {
       console.warn('Drive deletion warning (file removed from local/synced storage):', err);
       setFileToDelete(null);

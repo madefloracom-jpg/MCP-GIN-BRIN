@@ -414,7 +414,7 @@ export default function App() {
         ? firestoreData.logs
         : ((dataResult.logs && dataResult.logs.length > 0) ? dataResult.logs : INITIAL_BRIN_LOGS);
 
-      let effectiveDocuments = (firestoreData?.documents && firestoreData.documents.length > 0)
+      let effectiveDocuments = (firestoreData && Array.isArray(firestoreData.documents))
         ? firestoreData.documents
         : (cachedStr ? (JSON.parse(cachedStr)?.documents || []) : []);
 
@@ -926,6 +926,16 @@ export default function App() {
   };
 
   // ================= DOCUMENT ATTACHMENT MUTATIONS =================
+  const extractDriveId = (str?: string): string => {
+    if (!str) return '';
+    const clean = str.trim();
+    const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    if (dMatch && dMatch[1]) return dMatch[1];
+    const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (idMatch && idMatch[1]) return idMatch[1];
+    return clean;
+  };
+
   const handleAddDocument = (docOrDocs: DriveFile | DriveFile[]) => {
     const docsToAdd = Array.isArray(docOrDocs) ? docOrDocs : [docOrDocs];
     if (docsToAdd.length === 0) return;
@@ -934,13 +944,15 @@ export default function App() {
       let changed = false;
       const updated = [...prev];
       docsToAdd.forEach(newDoc => {
-        const exists = updated.some(d => 
-          d.id === newDoc.id || 
-          (d.webViewLink && newDoc.webViewLink && d.webViewLink === newDoc.webViewLink) ||
-          (newDoc.id && d.webViewLink && d.webViewLink.includes(newDoc.id)) ||
-          (d.id && newDoc.webViewLink && newDoc.webViewLink.includes(d.id)) ||
-          (d.name === newDoc.name)
-        );
+        const newDriveId = extractDriveId(newDoc.id) || extractDriveId(newDoc.webViewLink);
+        const exists = updated.some(d => {
+          const dDriveId = extractDriveId(d.id) || extractDriveId(d.webViewLink);
+          if (dDriveId && newDriveId && dDriveId === newDriveId) return true;
+          if (d.id === newDoc.id) return true;
+          if (d.webViewLink && newDoc.webViewLink && d.webViewLink === newDoc.webViewLink) return true;
+          if (d.name === newDoc.name && d.size === newDoc.size) return true;
+          return false;
+        });
         if (!exists) {
           updated.unshift(newDoc);
           changed = true;
@@ -967,16 +979,62 @@ export default function App() {
   };
 
   const handleDeleteDocument = (docId: string, webViewLink?: string) => {
+    const targetDriveId = extractDriveId(docId) || extractDriveId(webViewLink);
+
+    const matchesTarget = (urlOrId?: string) => {
+      if (!urlOrId) return false;
+      if (urlOrId === docId || urlOrId === webViewLink) return true;
+      const extracted = extractDriveId(urlOrId);
+      if (targetDriveId && extracted && targetDriveId === extracted) return true;
+      if (docId && urlOrId.includes(docId)) return true;
+      if (webViewLink && urlOrId.includes(webViewLink)) return true;
+      return false;
+    };
+
     let tasksChanged = false;
     const updatedTasks = tasks.map(t => {
-      if (t.attachmentUrl && (
-        t.attachmentUrl === webViewLink || 
-        t.attachmentUrl === docId || 
-        (docId && t.attachmentUrl.includes(docId)) ||
-        (webViewLink && t.attachmentUrl.includes(webViewLink))
-      )) {
+      let tModified = false;
+      let newAttachmentUrl = t.attachmentUrl;
+
+      if (matchesTarget(t.attachmentUrl)) {
+        newAttachmentUrl = undefined;
+        tModified = true;
+      }
+
+      let newActivities = t.activities;
+      if (t.activities && Array.isArray(t.activities)) {
+        newActivities = t.activities.map(act => {
+          let actModified = false;
+          let newActUrl = act.attachmentUrl;
+          if (matchesTarget(act.attachmentUrl)) {
+            newActUrl = undefined;
+            actModified = true;
+          }
+
+          let newAtts = act.attachments;
+          if (act.attachments && Array.isArray(act.attachments)) {
+            const filtered = act.attachments.filter(att => !matchesTarget(att.url));
+            if (filtered.length !== act.attachments.length) {
+              newAtts = filtered;
+              actModified = true;
+            }
+          }
+
+          if (actModified) {
+            tModified = true;
+            return { ...act, attachmentUrl: newActUrl, attachments: newAtts };
+          }
+          return act;
+        });
+      }
+
+      if (tModified) {
         tasksChanged = true;
-        return { ...t, attachmentUrl: undefined };
+        return {
+          ...t,
+          attachmentUrl: newAttachmentUrl,
+          activities: newActivities
+        };
       }
       return t;
     });
@@ -986,12 +1044,7 @@ export default function App() {
     }
 
     setDocuments(prev => {
-      const updated = prev.filter(d => 
-        d.id !== docId && 
-        (!webViewLink || d.webViewLink !== webViewLink) &&
-        !(docId && d.webViewLink && d.webViewLink.includes(docId)) &&
-        !(d.id && webViewLink && webViewLink.includes(d.id))
-      );
+      const updated = prev.filter(d => !matchesTarget(d.id) && !matchesTarget(d.webViewLink));
       const cacheData = {
         tasks: tasksChanged ? updatedTasks : tasks,
         milestones,
