@@ -948,6 +948,26 @@ export default function App() {
     });
   };
 
+  const handleDeleteDocument = (docId: string, webViewLink?: string) => {
+    setDocuments(prev => {
+      const updated = prev.filter(d => d.id !== docId && (!webViewLink || d.webViewLink !== webViewLink));
+      const cacheData = {
+        tasks,
+        milestones,
+        teamMembers,
+        risks,
+        logs,
+        documents: updated,
+        timestamp: new Date().toISOString()
+      };
+      if (spreadsheetId) {
+        localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
+        saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
+      }
+      return updated;
+    });
+  };
+
   const handleLinkAttachmentToTask = (taskId: string, attachmentUrl: string) => {
     const updatedTasks = tasks.map(t => {
       if (t.id === taskId) {
@@ -1295,6 +1315,7 @@ export default function App() {
                 tasks={tasks}
                 syncedDocuments={documents}
                 onAddDocument={handleAddDocument}
+                onDeleteDocument={handleDeleteDocument}
                 onLinkAttachmentToTask={handleLinkAttachmentToTask}
                 onAddLog={addLogEntry}
               />

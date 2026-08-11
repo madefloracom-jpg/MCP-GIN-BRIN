@@ -979,7 +979,10 @@ export async function listDriveFolderFiles(
       `https://www.googleapis.com/drive/v3/files?q=${query}&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,webViewLink,size,createdTime)&orderBy=name`, 
       accessToken
     );
-    return data.files || [];
+    return (data.files || []).map((f: any) => ({
+      ...f,
+      webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`
+    }));
   } catch (err) {
     console.warn(`Could not list files for folder ${folderId}:`, err);
     return [];

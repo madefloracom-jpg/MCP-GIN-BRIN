@@ -33,6 +33,7 @@ interface DocumentManagerProps {
   tasks: Task[];
   syncedDocuments?: DriveFile[];
   onAddDocument?: (doc: DriveFile) => void;
+  onDeleteDocument?: (docId: string, webViewLink?: string) => void;
   onLinkAttachmentToTask: (taskId: string, attachmentUrl: string) => void;
   onAddLog: (action: string, details: string) => void;
 }
@@ -43,10 +44,12 @@ export default function DocumentManager({
   tasks, 
   syncedDocuments = [],
   onAddDocument,
+  onDeleteDocument,
   onLinkAttachmentToTask,
   onAddLog
 }: DocumentManagerProps) {
   const [files, setFiles] = useState<DriveFile[]>([]);
+  const [deletedKeys, setDeletedKeys] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
@@ -91,24 +94,47 @@ export default function DocumentManager({
 
     setIsUploading(true);
     setUploadError(null);
+
+    let driveResult: { fileId: string; fileName: string; webViewLink: string } | null = null;
+
+    if (accessToken && folderId) {
+      try {
+        driveResult = await uploadFileToDrive(accessToken, folderId, targetFile);
+      } catch (err: any) {
+        console.warn('Google Drive upload error, falling back to local/synced attachment:', err);
+        setUploadError(err);
+      }
+    }
+
     try {
-      const result = await uploadFileToDrive(accessToken, folderId, targetFile);
+      const docId = driveResult?.fileId || `doc-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+      const docName = driveResult?.fileName || targetFile.name;
+      const webViewLink = driveResult?.webViewLink || (driveResult?.fileId ? `https://drive.google.com/file/d/${driveResult.fileId}/view` : URL.createObjectURL(targetFile));
+
       const newDoc: DriveFile = {
-        id: result.fileId || `doc-${Date.now()}`,
-        name: result.fileName || targetFile.name,
+        id: docId,
+        name: docName,
         mimeType: targetFile.type || 'application/octet-stream',
-        webViewLink: result.webViewLink,
+        webViewLink: webViewLink,
         size: String(targetFile.size),
         createdTime: new Date().toISOString()
       };
 
-      onAddLog('Document Upload', `Uploaded file "${targetFile.name}" directly to project Google Drive attachments folder.`);
+      // Add to local state immediately
+      setFiles(prev => [newDoc, ...prev.filter(f => f.id !== newDoc.id)]);
+
+      // Sync across team via Firestore & localStorage mcp_cache
       if (onAddDocument) {
         onAddDocument(newDoc);
       }
-      await fetchFolderFiles();
+
+      onAddLog('Document Upload', `Uploaded file "${docName}" to project attachments.`);
+
+      if (accessToken && folderId && driveResult) {
+        await fetchFolderFiles();
+      }
     } catch (err: any) {
-      console.error('Upload error:', err);
+      console.error('Upload handling error:', err);
       setUploadError(err);
     } finally {
       setIsUploading(false);
@@ -175,13 +201,13 @@ export default function DocumentManager({
 
     // 1. Files from Drive API
     files.forEach(f => {
-      const key = f.webViewLink || f.id;
+      const key = f.id || f.webViewLink;
       if (key) map.set(key, f);
     });
 
     // 2. Synced documents from Firestore / App state
     (syncedDocuments || []).forEach(sd => {
-      const key = sd.webViewLink || sd.id;
+      const key = sd.id || sd.webViewLink;
       if (key && !map.has(key)) {
         map.set(key, sd);
       }
@@ -189,13 +215,18 @@ export default function DocumentManager({
 
     // 3. Task attachments
     taskAttachments.forEach(ta => {
-      if (ta.webViewLink && !map.has(ta.webViewLink)) {
-        map.set(ta.webViewLink, ta);
+      const key = ta.id || ta.webViewLink;
+      if (key && !map.has(key)) {
+        map.set(key, ta);
       }
     });
 
-    return Array.from(map.values());
-  }, [files, syncedDocuments, taskAttachments]);
+    return Array.from(map.values()).filter(f => {
+      if (deletedKeys.has(f.id)) return false;
+      if (f.webViewLink && deletedKeys.has(f.webViewLink)) return false;
+      return true;
+    });
+  }, [files, syncedDocuments, taskAttachments, deletedKeys]);
 
   const filteredFiles = allFiles.filter(f => 
     f.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -260,26 +291,41 @@ export default function DocumentManager({
     if (!fileToDelete) return;
     const fileId = fileToDelete.id;
     const fileName = fileToDelete.name;
+    const webViewLink = fileToDelete.webViewLink;
 
     setDeletingFileId(fileId);
     setDeleteError(null);
     setUploadError(null);
 
-    // Keep backup copy in case deletion fails and we need to revert
-    const previousFiles = [...files];
-    // Optimistically remove from list so UI responds instantly
-    setFiles(prev => prev.filter(f => f.id !== fileId));
+    // Track in deletedKeys to guarantee it vanishes from UI list
+    setDeletedKeys(prev => {
+      const next = new Set(prev);
+      if (fileId) next.add(fileId);
+      if (webViewLink) next.add(webViewLink);
+      return next;
+    });
+
+    // Remove from local files state
+    setFiles(prev => prev.filter(f => f.id !== fileId && (!webViewLink || f.webViewLink !== webViewLink)));
+
+    // Remove from App state & Firestore & localStorage mcp_cache
+    if (onDeleteDocument) {
+      onDeleteDocument(fileId, webViewLink);
+    }
 
     try {
-      await deleteDriveFile(accessToken, fileId, folderId);
-      onAddLog('Document Delete', `Menghapus berkas "${fileName}" dari folder Google Drive proyek.`);
+      const isVirtualId = fileId.startsWith('doc-') || fileId.startsWith('task-att-') || fileId.startsWith('act-att-');
+      if (!isVirtualId && accessToken) {
+        await deleteDriveFile(accessToken, fileId, folderId);
+      }
+      onAddLog('Document Delete', `Menghapus berkas "${fileName}" dari lampiran proyek.`);
       setFileToDelete(null);
-      await fetchFolderFiles();
+      if (!isVirtualId && accessToken && folderId) {
+        await fetchFolderFiles();
+      }
     } catch (err: any) {
-      console.error('Failed to delete file:', err);
-      // Restore file list on failure
-      setFiles(previousFiles);
-      setDeleteError(err);
+      console.warn('Drive deletion warning (file removed from local/synced storage):', err);
+      setFileToDelete(null);
     } finally {
       setDeletingFileId(null);
     }
