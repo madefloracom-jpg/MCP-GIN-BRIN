@@ -32,7 +32,7 @@ interface DocumentManagerProps {
   folderId: string;
   tasks: Task[];
   syncedDocuments?: DriveFile[];
-  onAddDocument?: (doc: DriveFile) => void;
+  onAddDocument?: (doc: DriveFile | DriveFile[]) => void;
   onDeleteDocument?: (docId: string, webViewLink?: string) => void;
   onLinkAttachmentToTask: (taskId: string, attachmentUrl: string) => void;
   onAddLog: (action: string, details: string) => void;
@@ -76,6 +76,9 @@ export default function DocumentManager({
       if (accessToken && folderId) {
         const driveFiles = await listDriveFolderFiles(accessToken, folderId);
         setFiles(driveFiles);
+        if (driveFiles.length > 0 && onAddDocument) {
+          onAddDocument(driveFiles);
+        }
       } else {
         setFiles([]);
       }

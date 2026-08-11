@@ -926,11 +926,23 @@ export default function App() {
   };
 
   // ================= DOCUMENT ATTACHMENT MUTATIONS =================
-  const handleAddDocument = (newDoc: DriveFile) => {
+  const handleAddDocument = (docOrDocs: DriveFile | DriveFile[]) => {
+    const docsToAdd = Array.isArray(docOrDocs) ? docOrDocs : [docOrDocs];
+    if (docsToAdd.length === 0) return;
+
     setDocuments(prev => {
-      const exists = prev.some(d => d.id === newDoc.id || (d.webViewLink && d.webViewLink === newDoc.webViewLink));
-      if (exists) return prev;
-      const updated = [newDoc, ...prev];
+      let changed = false;
+      const updated = [...prev];
+      docsToAdd.forEach(newDoc => {
+        const exists = updated.some(d => d.id === newDoc.id || (d.webViewLink && newDoc.webViewLink && d.webViewLink === newDoc.webViewLink));
+        if (!exists) {
+          updated.unshift(newDoc);
+          changed = true;
+        }
+      });
+
+      if (!changed) return prev;
+
       const cacheData = {
         tasks,
         milestones,
@@ -949,10 +961,23 @@ export default function App() {
   };
 
   const handleDeleteDocument = (docId: string, webViewLink?: string) => {
+    let tasksChanged = false;
+    const updatedTasks = tasks.map(t => {
+      if (t.attachmentUrl && (t.attachmentUrl === webViewLink || t.attachmentUrl === docId || (docId && t.attachmentUrl.includes(docId)))) {
+        tasksChanged = true;
+        return { ...t, attachmentUrl: undefined };
+      }
+      return t;
+    });
+
+    if (tasksChanged) {
+      setTasks(updatedTasks);
+    }
+
     setDocuments(prev => {
       const updated = prev.filter(d => d.id !== docId && (!webViewLink || d.webViewLink !== webViewLink));
       const cacheData = {
-        tasks,
+        tasks: tasksChanged ? updatedTasks : tasks,
         milestones,
         teamMembers,
         risks,
