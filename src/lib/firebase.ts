@@ -8,6 +8,8 @@ import { getFirestore } from 'firebase/firestore';
 import { 
   getAuth, 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider, 
   onAuthStateChanged, 
   User, 
@@ -75,6 +77,22 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
 ) => {
+  // Process redirect result if coming back from redirect sign-in
+  getRedirectResult(auth)
+    .then((result) => {
+      if (result) {
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          cachedAccessToken = credential.accessToken;
+          storeAccessToken(cachedAccessToken);
+          if (onAuthSuccess) onAuthSuccess(result.user, cachedAccessToken);
+        }
+      }
+    })
+    .catch((err) => {
+      console.warn('Redirect result check error:', err);
+    });
+
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
       const activeToken = cachedAccessToken || getStoredAccessToken();
@@ -93,7 +111,7 @@ export const initAuth = (
   });
 };
 
-// Handle Google Sign-In
+// Handle Google Sign-In with automatic fallback on popup blocking
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
@@ -108,6 +126,18 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Google Sign-In Error:', error);
+    const code = error?.code || '';
+    const msg = error?.message || String(error);
+    if (code === 'auth/popup-blocked' || msg.includes('popup-blocked') || msg.includes('popup_blocked')) {
+      console.warn('Popup blocked by browser/iframe. Falling back to signInWithRedirect...');
+      try {
+        await signInWithRedirect(auth, provider);
+        return null;
+      } catch (redirectErr) {
+        console.error('Redirect sign-in error:', redirectErr);
+        throw redirectErr;
+      }
+    }
     throw error;
   } finally {
     isSigningIn = false;

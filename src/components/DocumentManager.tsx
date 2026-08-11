@@ -22,9 +22,11 @@ import {
   Link,
   ChevronDown,
   X,
-  AlertTriangle
+  AlertTriangle,
+  Lock
 } from 'lucide-react';
 import { uploadFileToDrive, listDriveFolderFiles, deleteDriveFile } from '../lib/googleApi';
+import { googleSignIn } from '../lib/firebase';
 import { Task, DriveFile } from '../types';
 
 interface DocumentManagerProps {
@@ -36,6 +38,7 @@ interface DocumentManagerProps {
   onDeleteDocument?: (docId: string, webViewLink?: string) => void;
   onLinkAttachmentToTask: (taskId: string, attachmentUrl: string) => void;
   onAddLog: (action: string, details: string) => void;
+  onReauthenticate?: () => Promise<string | null>;
 }
 
 export function extractDriveId(str?: string): string {
@@ -84,7 +87,8 @@ export default function DocumentManager({
   onAddDocument,
   onDeleteDocument,
   onLinkAttachmentToTask,
-  onAddLog
+  onAddLog,
+  onReauthenticate
 }: DocumentManagerProps) {
   const [files, setFiles] = useState<DriveFile[]>([]);
   const [deletedKeys, setDeletedKeys] = useState<Set<string>>(() => {
@@ -133,14 +137,15 @@ export default function DocumentManager({
   const fetchFolderFiles = async () => {
     setIsLoading(true);
     setListError(null);
+    const activeFolderId = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
     try {
-      if (accessToken && folderId) {
-        const driveFiles = await listDriveFolderFiles(accessToken, folderId);
+      if (accessToken) {
+        const driveFiles = await listDriveFolderFiles(accessToken, activeFolderId);
         const validDriveFiles = driveFiles.filter(f => !isDeletedDriveFile(f, deletedKeys));
         setFiles(validDriveFiles);
 
-        // Only sync drive files to Firestore if syncedDocuments is completely uninitialized
-        if (validDriveFiles.length > 0 && (!syncedDocuments || syncedDocuments.length === 0) && onAddDocument) {
+        // Sync drive files to Firestore / App state
+        if (validDriveFiles.length > 0 && onAddDocument) {
           onAddDocument(validDriveFiles);
         }
       } else {
@@ -163,14 +168,18 @@ export default function DocumentManager({
     setUploadError(null);
 
     let driveResult: { fileId: string; fileName: string; webViewLink: string } | null = null;
+    let activeToken = accessToken;
+    const targetFolder = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
 
-    if (accessToken && folderId) {
-      try {
-        driveResult = await uploadFileToDrive(accessToken, folderId, targetFile);
-      } catch (err: any) {
-        console.warn('Google Drive upload error, falling back to local/synced attachment:', err);
-        setUploadError(err);
+    try {
+      if (activeToken) {
+        driveResult = await uploadFileToDrive(activeToken, targetFolder, targetFile);
+      } else {
+        throw new Error('Gagal Upload ke Drive (401): Sesi OAuth Google kadaluarsa. Silakan login ulang.');
       }
+    } catch (err: any) {
+      console.warn('Google Drive upload error, falling back to local/synced attachment:', err);
+      setUploadError(err);
     }
 
     try {
@@ -196,6 +205,11 @@ export default function DocumentManager({
       }
 
       onAddLog('Document Upload', `Uploaded file "${docName}" to project attachments.`);
+
+      // Refresh Drive folder files directly
+      if (accessToken) {
+        await fetchFolderFiles();
+      }
     } catch (err: any) {
       console.error('Upload handling error:', err);
       setUploadError(err);
@@ -258,7 +272,7 @@ export default function DocumentManager({
     return result;
   }, [tasks]);
 
-  // Combine files from Firestore (syncedDocuments), task attachments, and Drive API with strict deduplication
+  // Combine files from Drive API, synced documents from Firestore, and task attachments with strict deduplication
   const allFiles = React.useMemo(() => {
     const list: DriveFile[] = [];
 
@@ -270,16 +284,14 @@ export default function DocumentManager({
       }
     };
 
-    // 1. Primary source: Synced documents from Firestore (SSOT for all users)
+    // 1. Primary source: Files directly fetched from Google Drive API folder
+    files.forEach(f => addIfUnique(f));
+
+    // 2. Synced documents from Firestore
     (syncedDocuments || []).forEach(sd => addIfUnique(sd));
 
-    // 2. Secondary source: Task attachments
+    // 3. Task attachments
     taskAttachments.forEach(ta => addIfUnique(ta));
-
-    // 3. Tertiary source: Files from Drive API (only if syncedDocuments is uninitialized)
-    if (!syncedDocuments || syncedDocuments.length === 0) {
-      files.forEach(f => addIfUnique(f));
-    }
 
     return list;
   }, [files, syncedDocuments, taskAttachments, deletedKeys]);
@@ -294,6 +306,7 @@ export default function DocumentManager({
     const isDriveDisabled = errMsg.includes('drive.googleapis.com') || errMsg.includes('Google Drive API') || errMsg.includes('Drive API');
     const isDisabled = isDriveDisabled || errMsg.includes('SERVICE_DISABLED') || errMsg.includes('has not been used');
     const isPermissionDenied = errMsg.includes('403') || errMsg.includes('permission') || errMsg.includes('Permission');
+    const isAuthError = errMsg.includes('401') || errMsg.includes('invalid authentication credentials') || errMsg.includes('OAuth') || errMsg.includes('Unauthenticated') || errMsg.includes('invalid_token') || err?.status === 401;
 
     const activationUrl = err?.activationUrl || 'https://console.developers.google.com/apis/api/drive.googleapis.com/overview';
 
@@ -303,7 +316,11 @@ export default function DocumentManager({
           <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <span className="font-bold text-amber-900 text-sm block mb-1">
-              {isDisabled ? 'Google Drive API Belum Diaktifkan' : 'Gagal Mengakses Google Drive'}
+              {isAuthError 
+                ? 'Sesi OAuth Google Kadaluarsa (401)' 
+                : isDisabled 
+                  ? 'Google Drive API Belum Diaktifkan' 
+                  : 'Gagal Mengakses Google Drive'}
             </span>
             <p className="text-amber-800 leading-relaxed font-mono text-[11px] bg-amber-100/70 p-2 rounded-lg border border-amber-200/80 break-words max-h-32 overflow-y-auto">
               {errMsg}
@@ -311,7 +328,37 @@ export default function DocumentManager({
           </div>
         </div>
 
-        {isDisabled ? (
+        {isAuthError ? (
+          <div className="pt-2 border-t border-amber-200/80 space-y-2">
+            <p className="text-amber-900 text-xs font-medium">
+              Token akses Google Drive Anda telah kadaluarsa atau tidak valid (401 Unauthorized). Silakan klik tombol di bawah untuk login kembali dan memperbarui OAuth token.
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                let freshToken: string | null = null;
+                if (onReauthenticate) {
+                  freshToken = await onReauthenticate();
+                } else {
+                  const res = await googleSignIn();
+                  freshToken = res?.accessToken || null;
+                }
+                if (freshToken) {
+                  setUploadError(null);
+                  setListError(null);
+                  fetchFolderFiles();
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-lg font-bold shadow-xs transition-all text-xs cursor-pointer"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              Refresh Token / Login Ulang Google
+            </button>
+            <p className="text-[11px] text-amber-700 italic">
+              *Setelah login ulang, token OAuth baru akan diperbarui dan file dapat diupload ke Drive secara normal.
+            </p>
+          </div>
+        ) : isDisabled ? (
           <div className="pt-2 border-t border-amber-200/80 space-y-2">
             <p className="text-amber-900 text-xs font-medium">
               Layanan <strong className="font-bold">Google Drive API</strong> belum diaktifkan pada Google Cloud Console project ini.
@@ -369,11 +416,15 @@ export default function DocumentManager({
 
     try {
       const isVirtualId = fileId.startsWith('doc-') || fileId.startsWith('task-att-') || fileId.startsWith('act-att-');
+      const targetFolder = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
       if (!isVirtualId && accessToken) {
-        await deleteDriveFile(accessToken, fileId, folderId);
+        await deleteDriveFile(accessToken, fileId, targetFolder);
       }
       onAddLog('Document Delete', `Menghapus berkas "${fileName}" dari lampiran proyek.`);
       setFileToDelete(null);
+      if (accessToken) {
+        await fetchFolderFiles();
+      }
     } catch (err: any) {
       console.warn('Drive deletion warning (file removed from local/synced storage):', err);
       setFileToDelete(null);

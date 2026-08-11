@@ -854,11 +854,12 @@ export async function uploadFileToDrive(
         let lastErrorMsg = '';
 
         // Attempt 1: Upload directly into the shared project folderId
-        if (folderId) {
+        const targetFolderId = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
+        if (targetFolderId) {
           try {
             const metadata = {
               name: file.name,
-              parents: [folderId]
+              parents: [targetFolderId]
             };
 
             const multipartBody = 
@@ -969,12 +970,13 @@ export async function uploadFileToDrive(
  */
 export async function listDriveFolderFiles(
   accessToken: string, 
-  folderId: string
+  folderId?: string
 ): Promise<Array<{ id: string; name: string; mimeType: string; webViewLink: string; size?: string; createdTime: string }>> {
-  if (!folderId) return [];
+  const targetFolderId = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
+  if (!targetFolderId) return [];
 
   try {
-    const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+    const query = encodeURIComponent(`'${targetFolderId}' in parents and trashed = false`);
     const data = await apiFetch(
       `https://www.googleapis.com/drive/v3/files?q=${query}&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,webViewLink,size,createdTime)&orderBy=name`, 
       accessToken

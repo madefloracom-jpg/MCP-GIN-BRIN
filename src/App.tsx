@@ -632,6 +632,21 @@ export default function App() {
     }
   };
 
+  const handleReauthenticate = async (): Promise<string | null> => {
+    try {
+      const result = await googleSignIn();
+      if (result && result.accessToken) {
+        setUser(result.user);
+        setAccessToken(result.accessToken);
+        setNeedsAuth(false);
+        return result.accessToken;
+      }
+    } catch (err: any) {
+      console.error('Re-authentication failed:', err);
+    }
+    return null;
+  };
+
   // Google Log Out trigger
   const handleLogout = async () => {
     await logout();
@@ -1412,6 +1427,7 @@ export default function App() {
                 onDeleteDocument={handleDeleteDocument}
                 onLinkAttachmentToTask={handleLinkAttachmentToTask}
                 onAddLog={addLogEntry}
+                onReauthenticate={handleReauthenticate}
               />
             )}
           </motion.div>
