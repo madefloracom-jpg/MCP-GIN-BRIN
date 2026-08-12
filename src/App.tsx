@@ -961,6 +961,45 @@ export default function App() {
     return '';
   };
 
+  const handleSyncDriveDocuments = (driveFiles: DriveFile[]) => {
+    const valid = driveFiles.filter(newDoc => {
+      const newDriveId = extractDriveId(newDoc.id) || extractDriveId(newDoc.webViewLink);
+      const isDeleted = deletedDocIds.some(deletedId => {
+        if (!deletedId) return false;
+        if (deletedId === newDoc.id || deletedId === newDoc.webViewLink) return true;
+        if (newDriveId && deletedId === newDriveId) return true;
+        const ext = extractDriveId(deletedId);
+        if (newDriveId && ext && newDriveId === ext) return true;
+        return false;
+      });
+      return !isDeleted;
+    });
+
+    setDocuments(prevDocs => {
+      const prevKeys = prevDocs.map(d => d.id || d.webViewLink).sort().join(',');
+      const validKeys = valid.map(d => d.id || d.webViewLink).sort().join(',');
+      if (prevKeys === validKeys && prevDocs.length === valid.length) {
+        return prevDocs;
+      }
+
+      const cacheData = {
+        tasks,
+        milestones,
+        teamMembers,
+        risks,
+        logs,
+        documents: valid,
+        deletedDocIds,
+        timestamp: new Date().toISOString()
+      };
+      if (spreadsheetId) {
+        localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
+        saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
+      }
+      return valid;
+    });
+  };
+
   const handleAddDocument = (docOrDocs: DriveFile | DriveFile[]) => {
     const docsToAdd = Array.isArray(docOrDocs) ? docOrDocs : [docOrDocs];
     if (docsToAdd.length === 0) return;
@@ -1457,6 +1496,7 @@ export default function App() {
                 syncedDocuments={documents}
                 deletedDocIds={deletedDocIds}
                 onAddDocument={handleAddDocument}
+                onSyncDriveDocuments={handleSyncDriveDocuments}
                 onDeleteDocument={handleDeleteDocument}
                 onLinkAttachmentToTask={handleLinkAttachmentToTask}
                 onAddLog={addLogEntry}

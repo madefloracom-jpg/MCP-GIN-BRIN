@@ -36,6 +36,7 @@ interface DocumentManagerProps {
   syncedDocuments?: DriveFile[];
   deletedDocIds?: string[];
   onAddDocument?: (doc: DriveFile | DriveFile[]) => void;
+  onSyncDriveDocuments?: (docs: DriveFile[]) => void;
   onDeleteDocument?: (docId: string, webViewLink?: string) => void;
   onLinkAttachmentToTask: (taskId: string, attachmentUrl: string) => void;
   onAddLog: (action: string, details: string) => void;
@@ -97,6 +98,7 @@ export default function DocumentManager({
   syncedDocuments = [],
   deletedDocIds = [],
   onAddDocument,
+  onSyncDriveDocuments,
   onDeleteDocument,
   onLinkAttachmentToTask,
   onAddLog,
@@ -156,8 +158,10 @@ export default function DocumentManager({
         const validDriveFiles = driveFiles.filter(f => !isDeletedDriveFile(f, deletedKeys, deletedDocIds));
         setFiles(validDriveFiles);
 
-        // Sync drive files to Firestore / App state
-        if (validDriveFiles.length > 0 && onAddDocument) {
+        // Sync drive files to Firestore / App state so all team members see exact SSOT
+        if (onSyncDriveDocuments) {
+          onSyncDriveDocuments(validDriveFiles);
+        } else if (onAddDocument && validDriveFiles.length > 0) {
           onAddDocument(validDriveFiles);
         }
       } else {
@@ -296,13 +300,15 @@ export default function DocumentManager({
       }
     };
 
-    // 1. Primary source: Files directly fetched from Google Drive API folder
-    files.forEach(f => addIfUnique(f));
+    // 1. Primary source: If live files were fetched from Google Drive API folder
+    if (files.length > 0) {
+      files.forEach(f => addIfUnique(f));
+    } else {
+      // If not logged in with OAuth or files not yet fetched locally, use synced documents from Firestore
+      (syncedDocuments || []).forEach(sd => addIfUnique(sd));
+    }
 
-    // 2. Synced documents from Firestore
-    (syncedDocuments || []).forEach(sd => addIfUnique(sd));
-
-    // 3. Task attachments
+    // 2. Task attachments
     taskAttachments.forEach(ta => addIfUnique(ta));
 
     return list;
