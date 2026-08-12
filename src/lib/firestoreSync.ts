@@ -14,6 +14,7 @@ export interface ProjectCloudData {
   risks: Risk[];
   logs: ActivityLog[];
   documents?: DriveFile[];
+  deletedDocIds?: string[];
   lastUpdated?: string;
   updatedBy?: string;
 }

@@ -203,6 +203,7 @@ export default function App() {
   const [risks, setRisks] = useState<Risk[]>(INITIAL_BRIN_RISKS);
   const [logs, setLogs] = useState<ActivityLog[]>(INITIAL_BRIN_LOGS);
   const [documents, setDocuments] = useState<DriveFile[]>([]);
+  const [deletedDocIds, setDeletedDocIds] = useState<string[]>([]);
   const [config, setConfig] = useState<Record<string, string>>({});
 
   // Loading and Syncer state
@@ -271,6 +272,9 @@ export default function App() {
         }
         if (cached.documents && Array.isArray(cached.documents)) {
           setDocuments(cached.documents);
+        }
+        if (cached.deletedDocIds && Array.isArray(cached.deletedDocIds)) {
+          setDeletedDocIds(cached.deletedDocIds);
         }
       } catch (e) {
         console.error('Error reading initial local cache:', e);
@@ -545,6 +549,9 @@ export default function App() {
       if (cloudData.documents && Array.isArray(cloudData.documents)) {
         updatedDocs = cloudData.documents;
         setDocuments(updatedDocs);
+      }
+      if (cloudData.deletedDocIds && Array.isArray(cloudData.deletedDocIds)) {
+        setDeletedDocIds(prev => Array.from(new Set([...prev, ...cloudData.deletedDocIds!])));
       }
       setLastSyncTime(new Date().toLocaleTimeString());
 
@@ -944,11 +951,14 @@ export default function App() {
   const extractDriveId = (str?: string): string => {
     if (!str) return '';
     const clean = str.trim();
-    const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
     if (dMatch && dMatch[1]) return dMatch[1];
-    const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]{20,})/);
     if (idMatch && idMatch[1]) return idMatch[1];
-    return clean;
+    if (/^[a-zA-Z0-9_-]{20,60}$/.test(clean) && !clean.startsWith('doc-') && !clean.startsWith('task-att-') && !clean.startsWith('act-att-')) {
+      return clean;
+    }
+    return '';
   };
 
   const handleAddDocument = (docOrDocs: DriveFile | DriveFile[]) => {
@@ -960,6 +970,19 @@ export default function App() {
       const updated = [...prev];
       docsToAdd.forEach(newDoc => {
         const newDriveId = extractDriveId(newDoc.id) || extractDriveId(newDoc.webViewLink);
+
+        // Do NOT add if this document or Drive ID is in deletedDocIds!
+        const isDeleted = deletedDocIds.some(deletedId => {
+          if (!deletedId) return false;
+          if (deletedId === newDoc.id || deletedId === newDoc.webViewLink) return true;
+          if (newDriveId && deletedId === newDriveId) return true;
+          const ext = extractDriveId(deletedId);
+          if (newDriveId && ext && newDriveId === ext) return true;
+          return false;
+        });
+
+        if (isDeleted) return;
+
         const exists = updated.some(d => {
           const dDriveId = extractDriveId(d.id) || extractDriveId(d.webViewLink);
           if (dDriveId && newDriveId && dDriveId === newDriveId) return true;
@@ -983,6 +1006,7 @@ export default function App() {
         risks,
         logs,
         documents: updated,
+        deletedDocIds,
         timestamp: new Date().toISOString()
       };
       if (spreadsheetId) {
@@ -995,85 +1019,93 @@ export default function App() {
 
   const handleDeleteDocument = (docId: string, webViewLink?: string) => {
     const targetDriveId = extractDriveId(docId) || extractDriveId(webViewLink);
+    const keysToDelete = Array.from(new Set([docId, webViewLink, targetDriveId].filter(Boolean) as string[]));
 
-    const matchesTarget = (urlOrId?: string) => {
-      if (!urlOrId) return false;
-      if (urlOrId === docId || urlOrId === webViewLink) return true;
-      const extracted = extractDriveId(urlOrId);
-      if (targetDriveId && extracted && targetDriveId === extracted) return true;
-      if (docId && urlOrId.includes(docId)) return true;
-      if (webViewLink && urlOrId.includes(webViewLink)) return true;
-      return false;
-    };
+    setDeletedDocIds(prevDeleted => {
+      const newDeleted = Array.from(new Set([...prevDeleted, ...keysToDelete]));
 
-    let tasksChanged = false;
-    const updatedTasks = tasks.map(t => {
-      let tModified = false;
-      let newAttachmentUrl = t.attachmentUrl;
+      const matchesTarget = (urlOrId?: string) => {
+        if (!urlOrId) return false;
+        if (keysToDelete.includes(urlOrId)) return true;
+        const extracted = extractDriveId(urlOrId);
+        if (targetDriveId && extracted && targetDriveId === extracted) return true;
+        if (docId && urlOrId.includes(docId)) return true;
+        if (webViewLink && urlOrId.includes(webViewLink)) return true;
+        return false;
+      };
 
-      if (matchesTarget(t.attachmentUrl)) {
-        newAttachmentUrl = undefined;
-        tModified = true;
-      }
+      let tasksChanged = false;
+      const updatedTasks = tasks.map(t => {
+        let tModified = false;
+        let newAttachmentUrl = t.attachmentUrl;
 
-      let newActivities = t.activities;
-      if (t.activities && Array.isArray(t.activities)) {
-        newActivities = t.activities.map(act => {
-          let actModified = false;
-          let newActUrl = act.attachmentUrl;
-          if (matchesTarget(act.attachmentUrl)) {
-            newActUrl = undefined;
-            actModified = true;
-          }
+        if (matchesTarget(t.attachmentUrl)) {
+          newAttachmentUrl = undefined;
+          tModified = true;
+        }
 
-          let newAtts = act.attachments;
-          if (act.attachments && Array.isArray(act.attachments)) {
-            const filtered = act.attachments.filter(att => !matchesTarget(att.url));
-            if (filtered.length !== act.attachments.length) {
-              newAtts = filtered;
+        let newActivities = t.activities;
+        if (t.activities && Array.isArray(t.activities)) {
+          newActivities = t.activities.map(act => {
+            let actModified = false;
+            let newActUrl = act.attachmentUrl;
+            if (matchesTarget(act.attachmentUrl)) {
+              newActUrl = undefined;
               actModified = true;
             }
-          }
 
-          if (actModified) {
-            tModified = true;
-            return { ...act, attachmentUrl: newActUrl, attachments: newAtts };
-          }
-          return act;
-        });
+            let newAtts = act.attachments;
+            if (act.attachments && Array.isArray(act.attachments)) {
+              const filtered = act.attachments.filter(att => !matchesTarget(att.url));
+              if (filtered.length !== act.attachments.length) {
+                newAtts = filtered;
+                actModified = true;
+              }
+            }
+
+            if (actModified) {
+              tModified = true;
+              return { ...act, attachmentUrl: newActUrl, attachments: newAtts };
+            }
+            return act;
+          });
+        }
+
+        if (tModified) {
+          tasksChanged = true;
+          return {
+            ...t,
+            attachmentUrl: newAttachmentUrl,
+            activities: newActivities
+          };
+        }
+        return t;
+      });
+
+      if (tasksChanged) {
+        setTasks(updatedTasks);
       }
 
-      if (tModified) {
-        tasksChanged = true;
-        return {
-          ...t,
-          attachmentUrl: newAttachmentUrl,
-          activities: newActivities
+      setDocuments(prevDocs => {
+        const updatedDocs = prevDocs.filter(d => !matchesTarget(d.id) && !matchesTarget(d.webViewLink));
+        const cacheData = {
+          tasks: tasksChanged ? updatedTasks : tasks,
+          milestones,
+          teamMembers,
+          risks,
+          logs,
+          documents: updatedDocs,
+          deletedDocIds: newDeleted,
+          timestamp: new Date().toISOString()
         };
-      }
-      return t;
-    });
+        if (spreadsheetId) {
+          localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
+          saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
+        }
+        return updatedDocs;
+      });
 
-    if (tasksChanged) {
-      setTasks(updatedTasks);
-    }
-
-    setDocuments(prev => {
-      const updated = prev.filter(d => !matchesTarget(d.id) && !matchesTarget(d.webViewLink));
-      const cacheData = {
-        tasks: tasksChanged ? updatedTasks : tasks,
-        milestones,
-        teamMembers,
-        risks,
-        logs,
-        documents: updated,
-        timestamp: new Date().toISOString()
-      };
-      if (spreadsheetId) {
-        localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
-        saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
-      }
-      return updated;
+      return newDeleted;
     });
   };
 
@@ -1423,6 +1455,7 @@ export default function App() {
                 folderId={folderId!}
                 tasks={tasks}
                 syncedDocuments={documents}
+                deletedDocIds={deletedDocIds}
                 onAddDocument={handleAddDocument}
                 onDeleteDocument={handleDeleteDocument}
                 onLinkAttachmentToTask={handleLinkAttachmentToTask}

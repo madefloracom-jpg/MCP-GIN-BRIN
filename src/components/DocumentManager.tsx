@@ -34,6 +34,7 @@ interface DocumentManagerProps {
   folderId: string;
   tasks: Task[];
   syncedDocuments?: DriveFile[];
+  deletedDocIds?: string[];
   onAddDocument?: (doc: DriveFile | DriveFile[]) => void;
   onDeleteDocument?: (docId: string, webViewLink?: string) => void;
   onLinkAttachmentToTask: (taskId: string, attachmentUrl: string) => void;
@@ -44,11 +45,14 @@ interface DocumentManagerProps {
 export function extractDriveId(str?: string): string {
   if (!str) return '';
   const clean = str.trim();
-  const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
   if (dMatch && dMatch[1]) return dMatch[1];
-  const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]{20,})/);
   if (idMatch && idMatch[1]) return idMatch[1];
-  return clean;
+  if (/^[a-zA-Z0-9_-]{20,60}$/.test(clean) && !clean.startsWith('doc-') && !clean.startsWith('task-att-') && !clean.startsWith('act-att-')) {
+    return clean;
+  }
+  return '';
 }
 
 export function isSameDriveFile(a: DriveFile, b: DriveFile): boolean {
@@ -61,20 +65,27 @@ export function isSameDriveFile(a: DriveFile, b: DriveFile): boolean {
   return false;
 }
 
-export function isDeletedDriveFile(doc: DriveFile, deletedKeys: Set<string>): boolean {
+export function isDeletedDriveFile(doc: DriveFile, deletedKeys: Set<string>, deletedDocIds: string[] = []): boolean {
   if (!doc) return false;
   const docId = doc.id;
   const webLink = doc.webViewLink;
   const driveId = extractDriveId(docId) || extractDriveId(webLink);
 
-  if (docId && deletedKeys.has(docId)) return true;
-  if (webLink && deletedKeys.has(webLink)) return true;
-  if (driveId && deletedKeys.has(driveId)) return true;
+  const mergedSet = new Set<string>();
+  deletedKeys.forEach(k => mergedSet.add(k));
+  deletedDocIds.forEach(id => mergedSet.add(id));
 
-  for (const k of deletedKeys) {
-    if (docId && (docId.includes(k) || k.includes(docId))) return true;
-    if (webLink && (webLink.includes(k) || k.includes(webLink))) return true;
-    if (driveId && (driveId.includes(k) || k.includes(driveId))) return true;
+  if (docId && mergedSet.has(docId)) return true;
+  if (webLink && mergedSet.has(webLink)) return true;
+  if (driveId && mergedSet.has(driveId)) return true;
+
+  for (const k of mergedSet) {
+    if (!k) continue;
+    if (docId && docId === k) return true;
+    if (webLink && webLink === k) return true;
+    if (driveId && driveId === k) return true;
+    const kExtracted = extractDriveId(k);
+    if (driveId && kExtracted && driveId === kExtracted) return true;
   }
   return false;
 }
@@ -84,6 +95,7 @@ export default function DocumentManager({
   folderId, 
   tasks, 
   syncedDocuments = [],
+  deletedDocIds = [],
   onAddDocument,
   onDeleteDocument,
   onLinkAttachmentToTask,
@@ -141,7 +153,7 @@ export default function DocumentManager({
     try {
       if (accessToken) {
         const driveFiles = await listDriveFolderFiles(accessToken, activeFolderId);
-        const validDriveFiles = driveFiles.filter(f => !isDeletedDriveFile(f, deletedKeys));
+        const validDriveFiles = driveFiles.filter(f => !isDeletedDriveFile(f, deletedKeys, deletedDocIds));
         setFiles(validDriveFiles);
 
         // Sync drive files to Firestore / App state
@@ -277,7 +289,7 @@ export default function DocumentManager({
     const list: DriveFile[] = [];
 
     const addIfUnique = (doc: DriveFile) => {
-      if (!doc || isDeletedDriveFile(doc, deletedKeys)) return;
+      if (!doc || isDeletedDriveFile(doc, deletedKeys, deletedDocIds)) return;
       const exists = list.some(item => isSameDriveFile(item, doc));
       if (!exists) {
         list.push(doc);
@@ -294,7 +306,7 @@ export default function DocumentManager({
     taskAttachments.forEach(ta => addIfUnique(ta));
 
     return list;
-  }, [files, syncedDocuments, taskAttachments, deletedKeys]);
+  }, [files, syncedDocuments, taskAttachments, deletedKeys, deletedDocIds]);
 
   const filteredFiles = allFiles.filter(f => 
     f.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -396,6 +408,8 @@ export default function DocumentManager({
     const fileName = fileToDelete.name;
     const webViewLink = fileToDelete.webViewLink;
 
+    const realDriveId = extractDriveId(fileId) || extractDriveId(webViewLink);
+
     setDeletingFileId(fileId);
     setDeleteError(null);
     setUploadError(null);
@@ -403,22 +417,20 @@ export default function DocumentManager({
     // Track in deletedKeys & localStorage to guarantee it vanishes from UI list permanently
     if (fileId) markKeyDeleted(fileId);
     if (webViewLink) markKeyDeleted(webViewLink);
-    const driveId = extractDriveId(fileId) || extractDriveId(webViewLink);
-    if (driveId) markKeyDeleted(driveId);
+    if (realDriveId) markKeyDeleted(realDriveId);
 
     // Remove from local files state immediately
     setFiles(prev => prev.filter(f => !isSameDriveFile(f, fileToDelete)));
 
-    // Remove from App state & Firestore & localStorage mcp_cache
+    // Remove from App state & Firestore & sync deletedDocIds
     if (onDeleteDocument) {
       onDeleteDocument(fileId, webViewLink);
     }
 
     try {
-      const isVirtualId = fileId.startsWith('doc-') || fileId.startsWith('task-att-') || fileId.startsWith('act-att-');
       const targetFolder = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
-      if (!isVirtualId && accessToken) {
-        await deleteDriveFile(accessToken, fileId, targetFolder);
+      if (accessToken && realDriveId) {
+        await deleteDriveFile(accessToken, realDriveId, targetFolder);
       }
       onAddLog('Document Delete', `Menghapus berkas "${fileName}" dari lampiran proyek.`);
       setFileToDelete(null);
@@ -426,7 +438,8 @@ export default function DocumentManager({
         await fetchFolderFiles();
       }
     } catch (err: any) {
-      console.warn('Drive deletion warning (file removed from local/synced storage):', err);
+      console.warn('Drive deletion notice:', err);
+      setDeleteError(err);
       setFileToDelete(null);
     } finally {
       setDeletingFileId(null);

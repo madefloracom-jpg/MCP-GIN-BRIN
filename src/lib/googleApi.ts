@@ -992,16 +992,39 @@ export async function listDriveFolderFiles(
 }
 
 /**
+ * Helper to extract Google Drive File ID from any string, URL, or raw ID.
+ */
+export function extractDriveId(str?: string): string {
+  if (!str) return '';
+  const clean = str.trim();
+  const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
+  if (dMatch && dMatch[1]) return dMatch[1];
+  const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]{20,})/);
+  if (idMatch && idMatch[1]) return idMatch[1];
+  if (/^[a-zA-Z0-9_-]{20,60}$/.test(clean) && !clean.startsWith('doc-') && !clean.startsWith('task-att-') && !clean.startsWith('act-att-')) {
+    return clean;
+  }
+  return '';
+}
+
+/**
  * Deletes a file from Google Drive with fallbacks for shared files (permanent delete -> trash -> remove parent)
  */
 export async function deleteDriveFile(accessToken: string, fileId: string, folderId?: string): Promise<void> {
+  const cleanDriveId = extractDriveId(fileId) || fileId;
+  const targetFolder = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
+
+  if (!cleanDriveId || cleanDriveId.startsWith('doc-') || cleanDriveId.startsWith('task-att-') || cleanDriveId.startsWith('act-att-')) {
+    return;
+  }
+
   const authHeaders = { 
     'Authorization': `Bearer ${accessToken}`
   };
 
   // 1. Try permanent DELETE with supportsAllDrives=true
   try {
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${cleanDriveId}?supportsAllDrives=true`, {
       method: 'DELETE',
       headers: authHeaders
     });
@@ -1011,13 +1034,17 @@ export async function deleteDriveFile(accessToken: string, fileId: string, folde
   }
 
   // 2. Fallback: Remove file from parent folder (works best for shared files where user isn't creator)
-  if (folderId) {
+  if (targetFolder) {
     try {
       const removeParentResp = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?removeParents=${encodeURIComponent(folderId)}&supportsAllDrives=true`,
+        `https://www.googleapis.com/drive/v3/files/${cleanDriveId}?removeParents=${encodeURIComponent(targetFolder)}&supportsAllDrives=true`,
         {
           method: 'PATCH',
-          headers: authHeaders
+          headers: {
+            ...authHeaders,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({})
         }
       );
       if (removeParentResp.ok || removeParentResp.status === 404) return;
@@ -1028,7 +1055,7 @@ export async function deleteDriveFile(accessToken: string, fileId: string, folde
 
   // 3. Fallback: Try moving to trash
   try {
-    const trashResp = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+    const trashResp = await fetch(`https://www.googleapis.com/drive/v3/files/${cleanDriveId}?supportsAllDrives=true`, {
       method: 'PATCH',
       headers: {
         ...authHeaders,
@@ -1042,7 +1069,7 @@ export async function deleteDriveFile(accessToken: string, fileId: string, folde
   }
 
   // 4. Final check to parse exact error if all methods fail
-  const finalResp = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true`, {
+  const finalResp = await fetch(`https://www.googleapis.com/drive/v3/files/${cleanDriveId}?supportsAllDrives=true`, {
     method: 'DELETE',
     headers: authHeaders
   });
