@@ -270,11 +270,34 @@ export default function App() {
         if (cached.logs && Array.isArray(cached.logs)) {
           setLogs(cached.logs);
         }
-        if (cached.documents && Array.isArray(cached.documents)) {
-          setDocuments(cached.documents);
-        }
+
+        let initDeleted: string[] = [];
         if (cached.deletedDocIds && Array.isArray(cached.deletedDocIds)) {
-          setDeletedDocIds(cached.deletedDocIds);
+          initDeleted = cached.deletedDocIds;
+        }
+        try {
+          const legacyDeleted = localStorage.getItem('mcp_deleted_docs');
+          if (legacyDeleted) {
+            const parsedLegacy = JSON.parse(legacyDeleted);
+            if (Array.isArray(parsedLegacy)) {
+              initDeleted = Array.from(new Set([...initDeleted, ...parsedLegacy]));
+            }
+          }
+        } catch (e) {}
+
+        setDeletedDocIds(initDeleted);
+
+        if (cached.documents && Array.isArray(cached.documents)) {
+          const filteredDocs = cached.documents.filter((d: DriveFile) => {
+            const dDriveId = extractDriveId(d.id) || extractDriveId(d.webViewLink);
+            return !initDeleted.some(delId => {
+              if (!delId) return false;
+              if (delId === d.id || delId === d.webViewLink) return true;
+              const delExt = extractDriveId(delId);
+              return dDriveId && delExt && dDriveId === delExt;
+            });
+          });
+          setDocuments(filteredDocs);
         }
       } catch (e) {
         console.error('Error reading initial local cache:', e);
@@ -418,9 +441,23 @@ export default function App() {
         ? firestoreData.logs
         : ((dataResult.logs && dataResult.logs.length > 0) ? dataResult.logs : INITIAL_BRIN_LOGS);
 
-      let effectiveDocuments = (firestoreData && Array.isArray(firestoreData.documents))
+      let effectiveDeletedDocIds = (firestoreData && Array.isArray(firestoreData.deletedDocIds))
+        ? firestoreData.deletedDocIds
+        : (cachedStr ? (JSON.parse(cachedStr)?.deletedDocIds || []) : []);
+
+      let rawDocuments = (firestoreData && Array.isArray(firestoreData.documents))
         ? firestoreData.documents
         : (cachedStr ? (JSON.parse(cachedStr)?.documents || []) : []);
+
+      const effectiveDocuments = rawDocuments.filter((d: DriveFile) => {
+        const dDriveId = extractDriveId(d.id) || extractDriveId(d.webViewLink);
+        return !effectiveDeletedDocIds.some(delId => {
+          if (!delId) return false;
+          if (delId === d.id || delId === d.webViewLink) return true;
+          const delExt = extractDriveId(delId);
+          return dDriveId && delExt && dDriveId === delExt;
+        });
+      });
 
       const rolledUpTasks = applyWbsRollups(effectiveTasks);
       setTasks(rolledUpTasks);
@@ -429,6 +466,7 @@ export default function App() {
       setRisks(effectiveRisks);
       setLogs(effectiveLogs);
       setDocuments(effectiveDocuments);
+      setDeletedDocIds(prev => Array.from(new Set([...prev, ...effectiveDeletedDocIds])));
       setConfig(dataResult.config || {});
       setLastSyncTime(new Date().toLocaleTimeString());
 
@@ -440,6 +478,7 @@ export default function App() {
         risks: effectiveRisks,
         logs: effectiveLogs,
         documents: effectiveDocuments,
+        deletedDocIds: effectiveDeletedDocIds,
         timestamp: new Date().toISOString()
       };
       localStorage.setItem(`mcp_cache_${sheetId}`, JSON.stringify(updatedCache));
@@ -546,12 +585,22 @@ export default function App() {
         updatedLogs = cloudData.logs;
         setLogs(updatedLogs);
       }
-      if (cloudData.documents && Array.isArray(cloudData.documents)) {
-        updatedDocs = cloudData.documents;
-        setDocuments(updatedDocs);
-      }
+      let currentDeleted = deletedDocIds;
       if (cloudData.deletedDocIds && Array.isArray(cloudData.deletedDocIds)) {
-        setDeletedDocIds(prev => Array.from(new Set([...prev, ...cloudData.deletedDocIds!])));
+        currentDeleted = Array.from(new Set([...deletedDocIds, ...cloudData.deletedDocIds]));
+        setDeletedDocIds(currentDeleted);
+      }
+      if (cloudData.documents && Array.isArray(cloudData.documents)) {
+        updatedDocs = cloudData.documents.filter(d => {
+          const dDriveId = extractDriveId(d.id) || extractDriveId(d.webViewLink);
+          return !currentDeleted.some(delId => {
+            if (!delId) return false;
+            if (delId === d.id || delId === d.webViewLink) return true;
+            const delExt = extractDriveId(delId);
+            return dDriveId && delExt && dDriveId === delExt;
+          });
+        });
+        setDocuments(updatedDocs);
       }
       setLastSyncTime(new Date().toLocaleTimeString());
 
@@ -563,6 +612,7 @@ export default function App() {
         risks: updatedRisks,
         logs: updatedLogs,
         documents: updatedDocs,
+        deletedDocIds: currentDeleted,
         timestamp: new Date().toISOString()
       };
       localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(updatedCache));
@@ -680,6 +730,7 @@ export default function App() {
       risks: updatedRisks,
       logs: updatedLogs,
       documents,
+      deletedDocIds,
       timestamp: new Date().toISOString()
     };
     if (spreadsheetId) {
@@ -738,6 +789,7 @@ export default function App() {
       risks,
       logs: updatedLogs,
       documents,
+      deletedDocIds,
       timestamp: new Date().toISOString()
     };
     if (spreadsheetId) {

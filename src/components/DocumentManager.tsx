@@ -145,6 +145,22 @@ export default function DocumentManager({
   };
 
   useEffect(() => {
+    if (deletedDocIds && deletedDocIds.length > 0) {
+      setDeletedKeys(prev => {
+        const next = new Set(prev);
+        deletedDocIds.forEach(id => {
+          if (id) {
+            next.add(id);
+            const driveId = extractDriveId(id);
+            if (driveId) next.add(driveId);
+          }
+        });
+        return next;
+      });
+    }
+  }, [deletedDocIds]);
+
+  useEffect(() => {
     fetchFolderFiles();
   }, [folderId, accessToken]);
 
