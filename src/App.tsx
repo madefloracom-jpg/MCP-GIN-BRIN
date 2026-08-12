@@ -289,9 +289,10 @@ export default function App() {
 
         if (cached.documents && Array.isArray(cached.documents)) {
           const filteredDocs = cached.documents.filter((d: DriveFile) => {
+            if (!d || (d.id && d.id.startsWith('doc-mcp-')) || (d.name && d.name.includes('Master Control Plan BRIN'))) return false;
             const dDriveId = extractDriveId(d.id) || extractDriveId(d.webViewLink);
             return !initDeleted.some(delId => {
-              if (!delId) return false;
+              if (!delId || delId === '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a' || delId.includes('/folders/')) return false;
               if (delId === d.id || delId === d.webViewLink) return true;
               const delExt = extractDriveId(delId);
               return dDriveId && delExt && dDriveId === delExt;
@@ -445,19 +446,24 @@ export default function App() {
         ? firestoreData.deletedDocIds
         : (cachedStr ? (JSON.parse(cachedStr)?.deletedDocIds || []) : []);
 
-      let rawDocuments = (firestoreData && Array.isArray(firestoreData.documents))
+      let rawDocuments = (firestoreData && Array.isArray(firestoreData.documents) && firestoreData.documents.length > 0)
         ? firestoreData.documents
-        : (cachedStr ? (JSON.parse(cachedStr)?.documents || []) : []);
+        : ((cachedStr && JSON.parse(cachedStr)?.documents && JSON.parse(cachedStr).documents.length > 0)
+          ? JSON.parse(cachedStr).documents
+          : []);
 
-      const effectiveDocuments = rawDocuments.filter((d: DriveFile) => {
+      const filteredDocs = rawDocuments.filter((d: DriveFile) => {
+        if (!d || (d.id && d.id.startsWith('doc-mcp-')) || (d.name && d.name.includes('Master Control Plan BRIN'))) return false;
         const dDriveId = extractDriveId(d.id) || extractDriveId(d.webViewLink);
         return !effectiveDeletedDocIds.some(delId => {
-          if (!delId) return false;
+          if (!delId || delId === '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a' || delId.includes('/folders/')) return false;
           if (delId === d.id || delId === d.webViewLink) return true;
           const delExt = extractDriveId(delId);
           return dDriveId && delExt && dDriveId === delExt;
         });
       });
+
+      const effectiveDocuments = filteredDocs;
 
       const rolledUpTasks = applyWbsRollups(effectiveTasks);
       setTasks(rolledUpTasks);
@@ -681,8 +687,6 @@ export default function App() {
             setConfirmState(prev => ({ ...prev, isOpen: false }));
           }
         });
-      } else {
-        alert(`Sign in failed: ${errMsg}`);
       }
     } finally {
       setIsLoggingIn(false);
@@ -1003,6 +1007,7 @@ export default function App() {
   const extractDriveId = (str?: string): string => {
     if (!str) return '';
     const clean = str.trim();
+    if (clean === '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a' || clean.includes('/folders/')) return '';
     const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
     if (dMatch && dMatch[1]) return dMatch[1];
     const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]{20,})/);
@@ -1014,10 +1019,11 @@ export default function App() {
   };
 
   const handleSyncDriveDocuments = (driveFiles: DriveFile[]) => {
+    if (!driveFiles || driveFiles.length === 0) return;
     const valid = driveFiles.filter(newDoc => {
       const newDriveId = extractDriveId(newDoc.id) || extractDriveId(newDoc.webViewLink);
       const isDeleted = deletedDocIds.some(deletedId => {
-        if (!deletedId) return false;
+        if (!deletedId || deletedId === '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a' || deletedId.includes('/folders/')) return false;
         if (deletedId === newDoc.id || deletedId === newDoc.webViewLink) return true;
         if (newDriveId && deletedId === newDriveId) return true;
         const ext = extractDriveId(deletedId);
@@ -1027,10 +1033,14 @@ export default function App() {
       return !isDeleted;
     });
 
+    const docsToSaveRaw = valid.length > 0 ? valid : driveFiles;
+
+    const docsToSave = docsToSaveRaw.filter(d => d && (!d.id || !d.id.startsWith('doc-mcp-')));
+
     setDocuments(prevDocs => {
       const prevKeys = prevDocs.map(d => d.id || d.webViewLink).sort().join(',');
-      const validKeys = valid.map(d => d.id || d.webViewLink).sort().join(',');
-      if (prevKeys === validKeys && prevDocs.length === valid.length) {
+      const validKeys = docsToSave.map(d => d.id || d.webViewLink).sort().join(',');
+      if (prevKeys === validKeys && prevDocs.length === docsToSave.length) {
         return prevDocs;
       }
 
@@ -1040,7 +1050,7 @@ export default function App() {
         teamMembers,
         risks,
         logs,
-        documents: valid,
+        documents: docsToSave,
         deletedDocIds,
         timestamp: new Date().toISOString()
       };
@@ -1048,7 +1058,7 @@ export default function App() {
         localStorage.setItem(`mcp_cache_${spreadsheetId}`, JSON.stringify(cacheData));
         saveToFirestore(spreadsheetId, cacheData, user?.email || undefined);
       }
-      return valid;
+      return docsToSave;
     });
   };
 
@@ -1321,6 +1331,50 @@ export default function App() {
                     {showManualToken ? 'Sembunyikan Access Token Input' : 'Gunakan Google Access Token Manual (Bypass)'}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Popup Blocked Error Notice */}
+            {loginErrorMsg && (loginErrorMsg.includes('popup-blocked') || loginErrorMsg.includes('popup_blocked') || loginErrorMsg.toLowerCase().includes('popup')) && (
+              <div className="w-full text-left bg-rose-950/70 border border-rose-500/50 rounded-xl p-4 my-4 text-xs text-rose-200 space-y-2.5">
+                <div className="flex items-center gap-2 text-rose-400 font-bold">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+                  <span>Google Sign-In Terblokir (Popup Blocked)</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-rose-300/90">
+                  Browser atau iFrame sandbox memblokir popup otentikasi Google Sign-In.
+                </p>
+                <div className="text-[11px] space-y-1.5 text-rose-200 bg-rose-950/90 p-3 rounded-lg border border-rose-800/60 font-sans">
+                  <p className="font-bold text-rose-400">Cara Mengatasi:</p>
+                  <p>1. <strong>Buka di Tab Baru</strong>: Klik tombol ↗ (Buka di Tab Baru) di pojok kanan atas preview AI Studio ini agar terbebas dari pembatasan iFrame.</p>
+                  <p>2. <strong>Izinkan Popup</strong>: Klik ikon gembok/blokir popup di bilah alamat URL browser Anda, lalu pilih <em>"Selalu izinkan popup..."</em>.</p>
+                  <p>3. <strong>Gunakan Mode Demo</strong>: Klik tombol hijau "Buka Pratinjau Master Control Plan (Mode Demo / Tamu)" di atas untuk mencoba seluruh fitur langsung.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowManualToken(!showManualToken)}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/40 rounded-lg text-[11px] transition-all font-semibold"
+                >
+                  {showManualToken ? 'Sembunyikan Access Token Input' : 'Punya Access Token? Masuk Manual (Bypass)'}
+                </button>
+              </div>
+            )}
+
+            {/* General Login Error Notice */}
+            {loginErrorMsg && 
+             !(loginErrorMsg.includes('403') || loginErrorMsg.includes('access_denied') || loginErrorMsg.includes('testing')) && 
+             !(loginErrorMsg.includes('popup-blocked') || loginErrorMsg.includes('popup_blocked') || loginErrorMsg.toLowerCase().includes('popup')) && (
+              <div className="w-full text-left bg-rose-950/70 border border-rose-500/50 rounded-xl p-4 my-4 text-xs text-rose-200 space-y-2">
+                <div className="flex items-center gap-2 text-rose-400 font-bold">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
+                  <span>Login Gagal</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-rose-300">
+                  {loginErrorMsg}
+                </p>
+                <p className="text-[10px] text-rose-400/90">
+                  Tips: Jika terus gagal, silakan gunakan tombol <strong>"Buka Pratinjau Master Control Plan (Mode Demo / Tamu)"</strong> di atas untuk mencoba semua fitur secara langsung.
+                </p>
               </div>
             )}
 

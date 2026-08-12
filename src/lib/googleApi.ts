@@ -841,13 +841,8 @@ export async function uploadFileToDrive(
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const dataUrl = reader.result as string;
-        const commaIndex = dataUrl.indexOf(',');
-        const base64Data = commaIndex !== -1 ? dataUrl.substring(commaIndex + 1) : dataUrl;
-
+        const fileBuffer = reader.result as ArrayBuffer;
         const boundary = 'MCP_MULTIPART_BOUNDARY_MARKER_999';
-        const delimiter = `\r\n--${boundary}\r\n`;
-        const closeDelim = `\r\n--${boundary}--`;
 
         let uploadSuccess = false;
         let responseData: any = null;
@@ -862,15 +857,20 @@ export async function uploadFileToDrive(
               parents: [targetFolderId]
             };
 
-            const multipartBody = 
-              delimiter +
+            const metadataHeader = 
+              `--${boundary}\r\n` +
               'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
               JSON.stringify(metadata) +
-              delimiter +
-              `Content-Type: ${file.type || 'application/octet-stream'}\r\n` +
-              'Content-Transfer-Encoding: base64\r\n\r\n' +
-              base64Data +
-              closeDelim;
+              `\r\n--${boundary}\r\n` +
+              `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`;
+              
+            const closingFooter = `\r\n--${boundary}--`;
+
+            const multipartBlob = new Blob([
+              metadataHeader,
+              new Uint8Array(fileBuffer),
+              closingFooter
+            ], { type: `multipart/related; boundary=${boundary}` });
 
             const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink', {
               method: 'POST',
@@ -878,7 +878,7 @@ export async function uploadFileToDrive(
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': `multipart/related; boundary=${boundary}`
               },
-              body: multipartBody
+              body: multipartBlob
             });
 
             if (response.ok) {
@@ -908,15 +908,20 @@ export async function uploadFileToDrive(
             name: file.name
           };
 
-          const fallbackBody = 
-            delimiter +
+          const metadataHeader = 
+            `--${boundary}\r\n` +
             'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
             JSON.stringify(fallbackMetadata) +
-            delimiter +
-            `Content-Type: ${file.type || 'application/octet-stream'}\r\n` +
-            'Content-Transfer-Encoding: base64\r\n\r\n' +
-            base64Data +
-            closeDelim;
+            `\r\n--${boundary}\r\n` +
+            `Content-Type: ${file.type || 'application/octet-stream'}\r\n\r\n`;
+            
+          const closingFooter = `\r\n--${boundary}--`;
+
+          const multipartBlob = new Blob([
+            metadataHeader,
+            new Uint8Array(fileBuffer),
+            closingFooter
+          ], { type: `multipart/related; boundary=${boundary}` });
 
           const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink', {
             method: 'POST',
@@ -924,7 +929,7 @@ export async function uploadFileToDrive(
               'Authorization': `Bearer ${accessToken}`,
               'Content-Type': `multipart/related; boundary=${boundary}`
             },
-            body: fallbackBody
+            body: multipartBlob
           });
 
           if (!response.ok) {
@@ -961,7 +966,7 @@ export async function uploadFileToDrive(
       }
     };
     reader.onerror = () => reject(new Error('Gagal membaca berkas dari komputer.'));
-    reader.readAsDataURL(file);
+    reader.readAsArrayBuffer(file);
   });
 }
 

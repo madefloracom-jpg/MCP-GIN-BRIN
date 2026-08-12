@@ -3,31 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   FolderOpen, 
-  Upload, 
-  Paperclip, 
-  Trash2, 
   ExternalLink, 
   Copy, 
-  FileText, 
-  Image, 
-  FileSpreadsheet, 
-  FileArchive, 
-  File, 
-  Loader2, 
   Check, 
-  Search,
-  Link,
-  ChevronDown,
-  X,
-  AlertTriangle,
-  Lock
+  Link, 
+  Grid, 
+  List,
+  Paperclip,
+  Trash2,
+  FileText,
+  AlertCircle,
+  UploadCloud,
+  Loader2,
+  Trash,
+  RefreshCw,
+  Plus,
+  Lock,
+  FileUp,
+  CloudLightning
 } from 'lucide-react';
-import { uploadFileToDrive, listDriveFolderFiles, deleteDriveFile } from '../lib/googleApi';
-import { googleSignIn } from '../lib/firebase';
 import { Task, DriveFile } from '../types';
+import { uploadFileToDrive, deleteDriveFile, listDriveFolderFiles, extractDriveId } from '../lib/googleApi';
+
+const PROJECT_FOLDER_ID = '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
 
 interface DocumentManagerProps {
   accessToken: string;
@@ -43,429 +44,312 @@ interface DocumentManagerProps {
   onReauthenticate?: () => Promise<string | null>;
 }
 
-export function extractDriveId(str?: string): string {
-  if (!str) return '';
-  const clean = str.trim();
-  const dMatch = clean.match(/\/d\/([a-zA-Z0-9_-]{20,})/);
-  if (dMatch && dMatch[1]) return dMatch[1];
-  const idMatch = clean.match(/[?&]id=([a-zA-Z0-9_-]{20,})/);
-  if (idMatch && idMatch[1]) return idMatch[1];
-  if (/^[a-zA-Z0-9_-]{20,60}$/.test(clean) && !clean.startsWith('doc-') && !clean.startsWith('task-att-') && !clean.startsWith('act-att-')) {
-    return clean;
-  }
-  return '';
-}
-
-export function isSameDriveFile(a: DriveFile, b: DriveFile): boolean {
-  if (!a || !b) return false;
-  const idA = extractDriveId(a.id) || extractDriveId(a.webViewLink);
-  const idB = extractDriveId(b.id) || extractDriveId(b.webViewLink);
-  if (idA && idB && idA === idB) return true;
-  if (a.webViewLink && b.webViewLink && a.webViewLink === b.webViewLink) return true;
-  if (a.name && b.name && a.name === b.name && (a.size === b.size || a.mimeType === b.mimeType)) return true;
-  return false;
-}
-
-export function isDeletedDriveFile(doc: DriveFile, deletedKeys: Set<string>, deletedDocIds: string[] = []): boolean {
-  if (!doc) return false;
-  const docId = doc.id;
-  const webLink = doc.webViewLink;
-  const driveId = extractDriveId(docId) || extractDriveId(webLink);
-
-  const mergedSet = new Set<string>();
-  deletedKeys.forEach(k => mergedSet.add(k));
-  deletedDocIds.forEach(id => mergedSet.add(id));
-
-  if (docId && mergedSet.has(docId)) return true;
-  if (webLink && mergedSet.has(webLink)) return true;
-  if (driveId && mergedSet.has(driveId)) return true;
-
-  for (const k of mergedSet) {
-    if (!k) continue;
-    if (docId && docId === k) return true;
-    if (webLink && webLink === k) return true;
-    if (driveId && driveId === k) return true;
-    const kExtracted = extractDriveId(k);
-    if (driveId && kExtracted && driveId === kExtracted) return true;
-  }
-  return false;
-}
-
 export default function DocumentManager({ 
-  accessToken, 
-  folderId, 
-  tasks, 
-  syncedDocuments = [],
+  accessToken,
+  folderId,
+  tasks = [],
   deletedDocIds = [],
   onAddDocument,
-  onSyncDriveDocuments,
   onDeleteDocument,
   onLinkAttachmentToTask,
   onAddLog,
   onReauthenticate
 }: DocumentManagerProps) {
-  const [files, setFiles] = useState<DriveFile[]>([]);
-  const [deletedKeys, setDeletedKeys] = useState<Set<string>>(() => {
-    try {
-      const stored = localStorage.getItem('mcp_deleted_docs');
-      return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
-  const [isLoading, setIsLoading] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
-  const [fileToDelete, setFileToDelete] = useState<DriveFile | null>(null);
-  const [deleteError, setDeleteError] = useState<any>(null);
-  const [linkSuccessToast, setLinkSuccessToast] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<any>(null);
-  const [listError, setListError] = useState<any>(null);
-
-  // Task linking helper state
-  const [selectedFileToLink, setSelectedFileToLink] = useState<DriveFile | null>(null);
+  const [embedLayout, setEmbedLayout] = useState<'list' | 'grid'>('list');
   const [targetTaskId, setTargetTaskId] = useState<string>('');
+  const [pastedUrl, setPastedUrl] = useState<string>('');
+  
+  // File Listing State (from Google Drive API)
+  const [apiFiles, setApiFiles] = useState<any[]>([]);
+  const [isListingLoading, setIsListingLoading] = useState<boolean>(false);
+  const [listingError, setListingError] = useState<string | null>(null);
 
-  const markKeyDeleted = (key: string) => {
-    if (!key) return;
-    setDeletedKeys(prev => {
-      const next = new Set(prev);
-      const driveId = extractDriveId(key);
-      next.add(key);
-      if (driveId) next.add(driveId);
-      try {
-        localStorage.setItem('mcp_deleted_docs', JSON.stringify(Array.from(next)));
-      } catch (e) {
-        console.warn('Failed to save deleted docs to localStorage:', e);
-      }
-      return next;
-    });
-  };
-
-  useEffect(() => {
-    if (deletedDocIds && deletedDocIds.length > 0) {
-      setDeletedKeys(prev => {
-        const next = new Set(prev);
-        deletedDocIds.forEach(id => {
-          if (id) {
-            next.add(id);
-            const driveId = extractDriveId(id);
-            if (driveId) next.add(driveId);
-          }
-        });
-        return next;
+  // Filter apiFiles against deletedDocIds
+  const filteredApiFiles = React.useMemo(() => {
+    if (!deletedDocIds || deletedDocIds.length === 0) return apiFiles;
+    return apiFiles.filter(file => {
+      const fileDriveId = file.id;
+      const fileUrl = file.webViewLink;
+      
+      const isDeleted = deletedDocIds.some(deletedId => {
+        if (!deletedId) return false;
+        if (deletedId === fileDriveId || deletedId === fileUrl) return true;
+        
+        // Extract IDs for deep comparison
+        const extractedFileId = extractDriveId(fileDriveId) || fileDriveId;
+        const extractedDeletedId = extractDriveId(deletedId) || deletedId;
+        return extractedFileId === extractedDeletedId;
       });
-    }
-  }, [deletedDocIds]);
+      return !isDeleted;
+    });
+  }, [apiFiles, deletedDocIds]);
 
-  useEffect(() => {
-    fetchFolderFiles();
-  }, [folderId, accessToken]);
+  // Uploading States
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadProgressMsg, setUploadProgressMsg] = useState<string>('');
+  const [dragActive, setDragActive] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchFolderFiles = async () => {
-    setIsLoading(true);
-    setListError(null);
-    const activeFolderId = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
+  // Deletion States
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Toast Notifications
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const activeFolderId = folderId || PROJECT_FOLDER_ID;
+
+  // Retrieve files using Drive API when accessToken is available
+  const fetchDriveApiFiles = async (tokenToUse?: string) => {
+    const currentToken = tokenToUse || accessToken;
+    if (!currentToken) return;
+
+    setIsListingLoading(true);
+    setListingError(null);
     try {
-      if (accessToken) {
-        const driveFiles = await listDriveFolderFiles(accessToken, activeFolderId);
-        const validDriveFiles = driveFiles.filter(f => !isDeletedDriveFile(f, deletedKeys, deletedDocIds));
-        setFiles(validDriveFiles);
-
-        // Sync drive files to Firestore / App state so all team members see exact SSOT
-        if (onSyncDriveDocuments) {
-          onSyncDriveDocuments(validDriveFiles);
-        } else if (onAddDocument && validDriveFiles.length > 0) {
-          onAddDocument(validDriveFiles);
-        }
-      } else {
-        setFiles([]);
-      }
+      const files = await listDriveFolderFiles(currentToken, activeFolderId);
+      setApiFiles(files || []);
     } catch (err: any) {
-      console.error('Failed to list files:', err);
-      setListError(err);
+      console.error('Error listing Drive API files:', err);
+      setListingError(err.message || 'Gagal memuat daftar berkas melalui API.');
     } finally {
-      setIsLoading(false);
+      setIsListingLoading(false);
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    if (!fileList || fileList.length === 0) return;
-    const targetFile = fileList[0];
+  useEffect(() => {
+    if (accessToken) {
+      fetchDriveApiFiles();
+    }
+  }, [accessToken, activeFolderId]);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // Drag and drop event handlers
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      await handleUploadFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      await handleUploadFile(e.target.files[0]);
+    }
+  };
+
+  const triggerFileInput = () => {
+    fileInputRef.current?.click();
+  };
+
+  // Handles actual file upload using googleApi
+  const handleUploadFile = async (file: File) => {
+    let tokenToUse = accessToken;
+    
+    if (!tokenToUse && onReauthenticate) {
+      setUploadProgressMsg('Menghubungkan ke Google Account...');
+      const newToken = await onReauthenticate();
+      if (newToken) {
+        tokenToUse = newToken;
+      }
+    }
+
+    if (!tokenToUse) {
+      showToast('Otorisasi akun Google diperlukan untuk mengunggah berkas.');
+      return;
+    }
 
     setIsUploading(true);
-    setUploadError(null);
-
-    let driveResult: { fileId: string; fileName: string; webViewLink: string } | null = null;
-    let activeToken = accessToken;
-    const targetFolder = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
+    setUploadProgressMsg(`Mengunggah "${file.name}" ke Google Drive...`);
 
     try {
-      if (activeToken) {
-        driveResult = await uploadFileToDrive(activeToken, targetFolder, targetFile);
-      } else {
-        throw new Error('Gagal Upload ke Drive (401): Sesi OAuth Google kadaluarsa. Silakan login ulang.');
-      }
-    } catch (err: any) {
-      console.warn('Google Drive upload error, falling back to local/synced attachment:', err);
-      setUploadError(err);
-    }
-
-    try {
-      const docId = driveResult?.fileId || `doc-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-      const docName = driveResult?.fileName || targetFile.name;
-      const webViewLink = driveResult?.webViewLink || (driveResult?.fileId ? `https://drive.google.com/file/d/${driveResult.fileId}/view` : URL.createObjectURL(targetFile));
-
-      const newDoc: DriveFile = {
-        id: docId,
-        name: docName,
-        mimeType: targetFile.type || 'application/octet-stream',
-        webViewLink: webViewLink,
-        size: String(targetFile.size),
-        createdTime: new Date().toISOString()
-      };
-
-      // Add to local state immediately
-      setFiles(prev => [newDoc, ...prev.filter(f => !isSameDriveFile(f, newDoc))]);
-
-      // Sync across team via Firestore & localStorage mcp_cache
+      const result = await uploadFileToDrive(tokenToUse, activeFolderId, file);
+      
+      // Save newly uploaded document info locally to synced cache
       if (onAddDocument) {
-        onAddDocument(newDoc);
-      }
-
-      onAddLog('Document Upload', `Uploaded file "${docName}" to project attachments.`);
-
-      // Refresh Drive folder files directly
-      if (accessToken) {
-        await fetchFolderFiles();
-      }
-    } catch (err: any) {
-      console.error('Upload handling error:', err);
-      setUploadError(err);
-    } finally {
-      setIsUploading(false);
-      e.target.value = '';
-    }
-  };
-
-  // Extract all task attachments and activity attachments from tasks prop
-  const taskAttachments: DriveFile[] = React.useMemo(() => {
-    const result: DriveFile[] = [];
-    (tasks || []).forEach(t => {
-      if (t.attachmentUrl && t.attachmentUrl.trim() !== '') {
-        const lower = t.attachmentUrl.toLowerCase();
-        let mime = 'application/octet-stream';
-        if (lower.includes('.pdf')) mime = 'application/pdf';
-        else if (lower.includes('.png') || lower.includes('.jpg') || lower.includes('.jpeg')) mime = 'image/png';
-        else if (lower.includes('spreadsheet') || lower.includes('.csv') || lower.includes('.xlsx')) mime = 'application/vnd.google-apps.spreadsheet';
-
-        result.push({
-          id: `task-att-${t.id}`,
-          name: `[${t.wbs}] ${t.name} (Lampiran Tugas)`,
-          mimeType: mime,
-          webViewLink: t.attachmentUrl,
-          size: 'Task Link',
+        onAddDocument({
+          id: result.fileId,
+          name: result.fileName,
+          webViewLink: result.webViewLink,
+          mimeType: file.type || 'application/octet-stream',
+          size: file.size ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : undefined,
           createdTime: new Date().toISOString()
         });
       }
 
-      if (t.activities && Array.isArray(t.activities)) {
-        t.activities.forEach(act => {
-          if (act.attachmentUrl && act.attachmentUrl.trim() !== '') {
-            result.push({
-              id: `act-att-${act.id}`,
-              name: act.attachmentName || `[${t.wbs}] Lampiran Aktivitas`,
-              mimeType: 'application/octet-stream',
-              webViewLink: act.attachmentUrl,
-              size: 'Aktivitas',
-              createdTime: act.timestamp || new Date().toISOString()
-            });
+      onAddLog('Upload Berkas', `Mengunggah berkas "${file.name}" langsung ke Google Drive.`);
+      showToast(`Berkas "${file.name}" berhasil diunggah!`);
+
+      // Pre-fill the Link Attachment input form for ease of use
+      setPastedUrl(result.webViewLink);
+
+      // Refresh list
+      fetchDriveApiFiles(tokenToUse);
+    } catch (err: any) {
+      // Auto-retry once on authorization expiration
+      const isAuthError = err.status === 401 || err.status === 403 || 
+                          String(err.message).includes('401') || String(err.message).includes('403') || 
+                          String(err.message).toLowerCase().includes('token');
+
+      if (isAuthError && onReauthenticate) {
+        try {
+          setUploadProgressMsg('Sesi login kedaluwarsa. Memperbarui otorisasi Google...');
+          const newToken = await onReauthenticate();
+          if (newToken) {
+            setUploadProgressMsg('Mengunggah ulang berkas Anda...');
+            const retryResult = await uploadFileToDrive(newToken, activeFolderId, file);
+            
+            if (onAddDocument) {
+              onAddDocument({
+                id: retryResult.fileId,
+                name: retryResult.fileName,
+                webViewLink: retryResult.webViewLink,
+                mimeType: file.type || 'application/octet-stream',
+                size: file.size ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : undefined,
+                createdTime: new Date().toISOString()
+              });
+            }
+
+            onAddLog('Upload Berkas', `Mengunggah berkas "${file.name}" langsung ke Google Drive setelah perpanjangan sesi.`);
+            showToast(`Berkas "${file.name}" berhasil diunggah!`);
+            setPastedUrl(retryResult.webViewLink);
+            fetchDriveApiFiles(newToken);
+            return;
           }
-          if (act.attachments && Array.isArray(act.attachments)) {
-            act.attachments.forEach((att, idx) => {
-              if (att.url && att.url.trim() !== '') {
-                result.push({
-                  id: `act-att-${act.id}-${idx}`,
-                  name: att.name || `[${t.wbs}] Lampiran Aktivitas #${idx + 1}`,
-                  mimeType: 'application/octet-stream',
-                  webViewLink: att.url,
-                  size: 'Aktivitas',
-                  createdTime: act.timestamp || new Date().toISOString()
-                });
-              }
-            });
-          }
+        } catch (retryErr: any) {
+          console.error('File upload retry failure:', retryErr);
+          showToast(`Gagal mengunggah berkas (Otorisasi Gagal): ${retryErr.message || 'Kesalahan API'}`);
+          return;
+        }
+      }
+
+      console.error('File upload failure:', err);
+      showToast(`Gagal mengunggah berkas: ${err.message || 'Kesalahan API'}`);
+    } finally {
+      setIsUploading(false);
+      setUploadProgressMsg('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // Handles file deletion using API and updates state
+  const handleDeleteFile = async (fileId: string, fileName: string, webViewLink: string) => {
+    let tokenToUse = accessToken;
+    if (!tokenToUse && onReauthenticate) {
+      const newToken = await onReauthenticate();
+      if (newToken) tokenToUse = newToken;
+    }
+
+    if (!tokenToUse) {
+      showToast('Otorisasi Google diperlukan untuk menghapus berkas.');
+      return;
+    }
+
+    setIsDeletingId(fileId);
+    try {
+      await deleteDriveFile(tokenToUse, fileId, activeFolderId);
+      
+      // Call prop deletion to clear links and synced state
+      if (onDeleteDocument) {
+        onDeleteDocument(fileId, webViewLink);
+      }
+
+      onAddLog('Hapus Berkas', `Menghapus berkas "${fileName}" dari folder Google Drive.`);
+      showToast(`Berkas "${fileName}" berhasil dihapus.`);
+
+      // Refresh list
+      fetchDriveApiFiles(tokenToUse);
+      setDeleteConfirmId(null);
+    } catch (err: any) {
+      console.warn('Google Drive API deletion failed, falling back to local hide:', err);
+      
+      // Fallback: Even if Google API fails (e.g. permission restriction), we hide/unlink it locally!
+      if (onDeleteDocument) {
+        onDeleteDocument(fileId, webViewLink);
+      }
+      
+      onAddLog('Sembunyikan Berkas', `Melepas/menyembunyikan berkas "${fileName}" dari workspace.`);
+      showToast(`Berkas "${fileName}" dilepas dari tampilan karena keterbatasan hak akses Google Drive.`);
+      
+      // Refresh list
+      fetchDriveApiFiles(tokenToUse);
+      setDeleteConfirmId(null);
+    } finally {
+      setIsDeletingId(null);
+    }
+  };
+
+  // Filter tasks that can accept attachments
+  const validTasks = React.useMemo(() => {
+    return tasks.filter(t => t && t.id);
+  }, [tasks]);
+
+  // Extract all currently active task attachments to display in an elegant table/list
+  const activeAttachments = React.useMemo(() => {
+    const list: Array<{ taskId: string; taskName: string; wbs: string; url: string; fileName: string }> = [];
+    tasks.forEach(t => {
+      if (t.attachmentUrl && t.attachmentUrl.trim() !== '') {
+        let derivedName = 'Berkas Google Drive';
+        list.push({
+          taskId: t.id,
+          taskName: t.name,
+          wbs: t.wbs,
+          url: t.attachmentUrl,
+          fileName: derivedName
         });
       }
     });
-    return result;
+    return list;
   }, [tasks]);
 
-  // Combine files from Drive API, synced documents from Firestore, and task attachments with strict deduplication
-  const allFiles = React.useMemo(() => {
-    const list: DriveFile[] = [];
+  const handleLinkFileToTaskSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetTaskId || !pastedUrl.trim()) return;
 
-    const addIfUnique = (doc: DriveFile) => {
-      if (!doc || isDeletedDriveFile(doc, deletedKeys, deletedDocIds)) return;
-      const exists = list.some(item => isSameDriveFile(item, doc));
-      if (!exists) {
-        list.push(doc);
-      }
-    };
+    const urlToLink = pastedUrl.trim();
+    const task = tasks.find(t => t.id === targetTaskId);
+    const taskName = task ? task.name : targetTaskId;
 
-    // 1. Primary source: If live files were fetched from Google Drive API folder
-    if (files.length > 0) {
-      files.forEach(f => addIfUnique(f));
-    } else {
-      // If not logged in with OAuth or files not yet fetched locally, use synced documents from Firestore
-      (syncedDocuments || []).forEach(sd => addIfUnique(sd));
-    }
+    onLinkAttachmentToTask(targetTaskId, urlToLink);
+    onAddLog('Link Attachment', `Menghubungkan berkas ke tugas [${task?.wbs || ''}] ${taskName}.`);
 
-    // 2. Task attachments
-    taskAttachments.forEach(ta => addIfUnique(ta));
+    setPastedUrl('');
+    setTargetTaskId('');
 
-    return list;
-  }, [files, syncedDocuments, taskAttachments, deletedKeys, deletedDocIds]);
-
-  const filteredFiles = allFiles.filter(f => 
-    f.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const renderDriveErrorNotice = (err: any) => {
-    if (!err) return null;
-    const errMsg = typeof err === 'string' ? err : (err.message || String(err));
-    const isDriveDisabled = errMsg.includes('drive.googleapis.com') || errMsg.includes('Google Drive API') || errMsg.includes('Drive API');
-    const isDisabled = isDriveDisabled || errMsg.includes('SERVICE_DISABLED') || errMsg.includes('has not been used');
-    const isPermissionDenied = errMsg.includes('403') || errMsg.includes('permission') || errMsg.includes('Permission');
-    const isAuthError = errMsg.includes('401') || errMsg.includes('invalid authentication credentials') || errMsg.includes('OAuth') || errMsg.includes('Unauthenticated') || errMsg.includes('invalid_token') || err?.status === 401;
-
-    const activationUrl = err?.activationUrl || 'https://console.developers.google.com/apis/api/drive.googleapis.com/overview';
-
-    return (
-      <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs shadow-xs space-y-2.5 my-3">
-        <div className="flex items-start gap-2.5">
-          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <span className="font-bold text-amber-900 text-sm block mb-1">
-              {isAuthError 
-                ? 'Sesi OAuth Google Kadaluarsa (401)' 
-                : isDisabled 
-                  ? 'Google Drive API Belum Diaktifkan' 
-                  : 'Gagal Mengakses Google Drive'}
-            </span>
-            <p className="text-amber-800 leading-relaxed font-mono text-[11px] bg-amber-100/70 p-2 rounded-lg border border-amber-200/80 break-words max-h-32 overflow-y-auto">
-              {errMsg}
-            </p>
-          </div>
-        </div>
-
-        {isAuthError ? (
-          <div className="pt-2 border-t border-amber-200/80 space-y-2">
-            <p className="text-amber-900 text-xs font-medium">
-              Token akses Google Drive Anda telah kadaluarsa atau tidak valid (401 Unauthorized). Silakan klik tombol di bawah untuk login kembali dan memperbarui OAuth token.
-            </p>
-            <button
-              type="button"
-              onClick={async () => {
-                let freshToken: string | null = null;
-                if (onReauthenticate) {
-                  freshToken = await onReauthenticate();
-                } else {
-                  const res = await googleSignIn();
-                  freshToken = res?.accessToken || null;
-                }
-                if (freshToken) {
-                  setUploadError(null);
-                  setListError(null);
-                  fetchFolderFiles();
-                }
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-lg font-bold shadow-xs transition-all text-xs cursor-pointer"
-            >
-              <Lock className="h-3.5 w-3.5" />
-              Refresh Token / Login Ulang Google
-            </button>
-            <p className="text-[11px] text-amber-700 italic">
-              *Setelah login ulang, token OAuth baru akan diperbarui dan file dapat diupload ke Drive secara normal.
-            </p>
-          </div>
-        ) : isDisabled ? (
-          <div className="pt-2 border-t border-amber-200/80 space-y-2">
-            <p className="text-amber-900 text-xs font-medium">
-              Layanan <strong className="font-bold">Google Drive API</strong> belum diaktifkan pada Google Cloud Console project ini.
-            </p>
-            <a
-              href={activationUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold shadow-xs transition-all text-xs"
-            >
-              Aktifkan Google Drive API Sekarang
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-            <p className="text-[11px] text-amber-700 italic">
-              *Setelah tombol [ENABLE] diklik di Google Console, tunggu 1-2 menit lalu coba upload kembali.
-            </p>
-          </div>
-        ) : isPermissionDenied ? (
-          <div className="pt-2 border-t border-amber-200/80 space-y-2">
-            <p className="text-amber-900 text-xs font-medium">
-              Akun Google yang digunakan belum memiliki izin tulis/baca ke folder Google Drive ini.
-            </p>
-            <p className="text-[11px] text-amber-800">
-              Minta pemilik folder untuk membagikan akses folder (ID: <code className="font-mono bg-amber-100 px-1 rounded">{folderId}</code>) dengan peran Editor ke email Anda.
-            </p>
-          </div>
-        ) : null}
-      </div>
-    );
+    showToast(`Berkas berhasil ditautkan ke tugas "${taskName}"!`);
   };
 
-  const executeDeleteFile = async () => {
-    if (!fileToDelete) return;
-    const fileId = fileToDelete.id;
-    const fileName = fileToDelete.name;
-    const webViewLink = fileToDelete.webViewLink;
-
-    const realDriveId = extractDriveId(fileId) || extractDriveId(webViewLink);
-
-    setDeletingFileId(fileId);
-    setDeleteError(null);
-    setUploadError(null);
-
-    // Track in deletedKeys & localStorage to guarantee it vanishes from UI list permanently
-    if (fileId) markKeyDeleted(fileId);
-    if (webViewLink) markKeyDeleted(webViewLink);
-    if (realDriveId) markKeyDeleted(realDriveId);
-
-    // Remove from local files state immediately
-    setFiles(prev => prev.filter(f => !isSameDriveFile(f, fileToDelete)));
-
-    // Remove from App state & Firestore & sync deletedDocIds
-    if (onDeleteDocument) {
-      onDeleteDocument(fileId, webViewLink);
+  const handleQuickLink = (fileUrl: string) => {
+    setPastedUrl(fileUrl);
+    showToast('Tautan berkas disalin ke formulir tautan tugas di bawah!');
+    const formElement = document.getElementById('task-linker-form');
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: 'smooth' });
     }
+  };
 
-    try {
-      const targetFolder = folderId || '1xzgKGg892wvoCZIyxifeFty_d4rRsy_a';
-      if (accessToken && realDriveId) {
-        await deleteDriveFile(accessToken, realDriveId, targetFolder);
-      }
-      onAddLog('Document Delete', `Menghapus berkas "${fileName}" dari lampiran proyek.`);
-      setFileToDelete(null);
-      if (accessToken) {
-        await fetchFolderFiles();
-      }
-    } catch (err: any) {
-      console.warn('Drive deletion notice:', err);
-      setDeleteError(err);
-      setFileToDelete(null);
-    } finally {
-      setDeletingFileId(null);
-    }
+  const handleUnlink = (taskId: string, taskName: string) => {
+    onLinkAttachmentToTask(taskId, '');
+    onAddLog('Unlink Attachment', `Melepas tautan berkas dari tugas ${taskName}.`);
+    showToast(`Tautan berkas pada "${taskName}" telah dilepas.`);
   };
 
   const copyToClipboard = (url: string, id: string) => {
@@ -474,332 +358,425 @@ export default function DocumentManager({
     setTimeout(() => setCopiedId(null), 1500);
   };
 
-  const handleLinkFileToTaskSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedFileToLink || !targetTaskId) return;
-
-    onLinkAttachmentToTask(targetTaskId, selectedFileToLink.webViewLink);
-    onAddLog('Link Attachment', `Linked file "${selectedFileToLink.name}" to task "${targetTaskId}".`);
-    
-    setSelectedFileToLink(null);
-    setTargetTaskId('');
-    setLinkSuccessToast(`Berkas "${selectedFileToLink.name}" berhasil ditautkan ke tugas.`);
-    setTimeout(() => setLinkSuccessToast(null), 3500);
-  };
-
-  const getFileIcon = (mimeType: string) => {
-    if (mimeType.includes('pdf')) return <FileText className="h-6 w-6 text-red-500" />;
-    if (mimeType.includes('image')) return <Image className="h-6 w-6 text-blue-500" />;
-    if (mimeType.includes('spreadsheet') || mimeType.includes('csv')) return <FileSpreadsheet className="h-6 w-6 text-emerald-500" />;
-    if (mimeType.includes('zip') || mimeType.includes('tar') || mimeType.includes('rar')) return <FileArchive className="h-6 w-6 text-purple-500" />;
-    return <File className="h-6 w-6 text-slate-500" />;
-  };
-
-  const formatBytes = (bytesStr?: string) => {
-    if (!bytesStr) return 'Unknown size';
-    const bytes = parseInt(bytesStr);
-    if (isNaN(bytes)) return 'Unknown size';
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  const handleTriggerReauth = async () => {
+    if (onReauthenticate) {
+      const token = await onReauthenticate();
+      if (token) {
+        fetchDriveApiFiles(token);
+        showToast('Google OAuth berhasil terhubung!');
+      }
+    }
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div className="space-y-6">
       
-      {/* Upload Panel */}
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between h-fit">
-        <div>
-          <h3 className="font-bold text-sm text-slate-800">Drive Cloud Storage</h3>
-          <p className="text-[11px] text-slate-500 mt-0.5 font-medium">Upload file attachments to Google Drive folder</p>
-        </div>
-
-        {uploadError && renderDriveErrorNotice(uploadError)}
-
-        {/* Upload Button Component */}
-        <div className="my-6">
-          <label className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
-            isUploading 
-              ? 'bg-slate-50/50 border-slate-300 pointer-events-none' 
-              : 'border-slate-200 hover:border-slate-400 hover:bg-slate-50/20'
-          }`}>
-            <input 
-              type="file" 
-              onChange={handleFileUpload} 
-              className="hidden" 
-              disabled={isUploading}
-            />
-            
-            {isUploading ? (
-              <div className="flex flex-col items-center">
-                <Loader2 className="h-8 w-8 text-slate-900 animate-spin mb-3" />
-                <span className="text-xs font-bold text-slate-800">Uploading File to Drive</span>
-                <span className="text-[10px] text-slate-400 mt-1">Authenticating chunk stream...</span>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center">
-                <div className="p-3 bg-slate-100 text-slate-600 rounded-xl mb-3">
-                  <Upload className="h-6 w-6" />
-                </div>
-                <span className="text-xs font-bold text-slate-800">Select Document To Upload</span>
-                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-relaxed">
-                  Files upload directly to the specific Drive folder and become linkable to tasks.
-                </span>
-              </div>
-            )}
-          </label>
-        </div>
-
-        {/* Drive Info Badge */}
-        <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg flex items-start gap-3">
-          <FolderOpen className="h-5 w-5 text-slate-500 flex-shrink-0 mt-0.5" />
-          <div className="text-[10px] leading-relaxed text-slate-600 font-semibold">
-            <span className="text-slate-900 block font-bold mb-0.5">Control Storage Location</span>
-            ID: <span className="font-mono bg-slate-200 px-1 py-0.5 rounded text-[9px] text-slate-700">{folderId}</span>
-            <p className="mt-1">
-              Documents are shared based on user Drive access credentials to preserve enterprise confidentiality bounds.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Attachments List */}
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm lg:col-span-2 flex flex-col justify-between">
-        
-        {/* Search header */}
-        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pb-4 border-b border-slate-200 mb-4">
+      {/* Top Header Card */}
+      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-3 border-b border-slate-150">
           <div>
-            <h3 className="font-bold text-sm text-slate-800">Uploaded Attachments ({files.length})</h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">Manage references, specifications, sheets and images</p>
+            <div className="flex items-center gap-2">
+              <FolderOpen className="h-5 w-5 text-blue-600" />
+              <h2 className="text-base font-bold text-slate-900">Penyimpanan Dokumen Google Drive</h2>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap mt-1">
+              <p className="text-xs text-slate-500">
+                Folder Resmi: <code className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-semibold">{activeFolderId}</code>
+              </p>
+              {accessToken ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[10px] font-bold">
+                  <Check className="h-3 w-3" /> API Google OAuth Aktif
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleTriggerReauth}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded text-[10px] font-bold cursor-pointer transition-all"
+                >
+                  <Lock className="h-3 w-3" /> Klik untuk Hubungkan Google Drive API
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-250 px-3 py-1.5 rounded-lg w-full sm:w-48 text-xs">
-            <Search className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
-            <input 
-              type="text" 
-              placeholder="Filter by name..." 
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="w-full text-[11px] text-slate-800 focus:outline-none bg-transparent"
-            />
+
+          {/* Quick Actions */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="bg-slate-100 p-1 rounded-lg flex items-center border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setEmbedLayout('list')}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  embedLayout === 'list' 
+                    ? 'bg-white text-blue-700 shadow-xs border border-slate-200' 
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <List className="h-3.5 w-3.5" />
+                Daftar
+              </button>
+              <button
+                type="button"
+                onClick={() => setEmbedLayout('grid')}
+                className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  embedLayout === 'grid' 
+                    ? 'bg-white text-blue-700 shadow-xs border border-slate-200' 
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Grid className="h-3.5 w-3.5" />
+                Grid
+              </button>
+            </div>
+
+            <a
+              href={`https://drive.google.com/drive/folders/${activeFolderId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Buka Google Drive
+            </a>
           </div>
         </div>
 
-        {listError && renderDriveErrorNotice(listError)}
+        {/* Real-time Document Management Grid */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 pt-1">
+          
+          {/* Main Embedded Drive View */}
+          <div className="xl:col-span-2 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 bg-blue-50/50 p-3 rounded-lg border border-blue-100 text-xs text-blue-800">
+              <span className="font-medium flex items-center gap-1.5">
+                <CloudLightning className="h-4 w-4 text-blue-600" />
+                Penjelajah Folder Google Drive interaktif terintegrasi langsung di bawah ini.
+              </span>
+            </div>
 
-        {/* Files grid scroll area */}
-        <div className="flex-1 overflow-y-auto max-h-[380px] space-y-3.5 pr-1">
-          {isLoading ? (
-            <div className="py-16 flex flex-col items-center justify-center text-slate-400">
-              <Loader2 className="h-6 w-6 animate-spin mb-3 text-slate-600" />
-              <p className="text-xs font-semibold">Listing folder contents...</p>
+            {/* Embedded Drive Frame */}
+            <div className="relative w-full rounded-xl overflow-hidden border border-slate-200 bg-white shadow-sm">
+              <iframe
+                key={`drive-embed-${embedLayout}`}
+                src={`https://drive.google.com/embeddedfolderview?id=${activeFolderId}#${embedLayout}`}
+                className="w-full h-[480px] border-0"
+                title="Google Drive Live Folder"
+              />
             </div>
-          ) : filteredFiles.length === 0 ? (
-            <div className="py-16 text-center text-slate-400 text-xs">
-              No files uploaded under this project folder. Upload a file on the left panel to populate list.
-            </div>
-          ) : (
-            filteredFiles.map(f => (
-              <div 
-                key={f.id} 
-                className="p-3.5 border border-slate-200 bg-white rounded-xl hover:shadow-xs hover:border-slate-300 transition-all flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between"
+          </div>
+
+          {/* Upload and Delete Control Panel */}
+          <div className="space-y-4">
+            
+            {/* Direct Upload Area */}
+            <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                  <UploadCloud className="h-4 w-4 text-blue-600" />
+                  Unggah Berkas Baru
+                </h3>
+                {isUploading && (
+                  <span className="flex items-center gap-1 text-[10px] text-blue-600 font-bold animate-pulse">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Sedang Mengunggah
+                  </span>
+                )}
+              </div>
+
+              {/* Drag and Drop Zone */}
+              <div
+                onDragEnter={handleDrag}
+                onDragOver={handleDrag}
+                onDragLeave={handleDrag}
+                onDrop={handleDrop}
+                onClick={triggerFileInput}
+                className={`border-2 border-dashed rounded-lg p-5 text-center transition-all cursor-pointer flex flex-col items-center justify-center space-y-2 ${
+                  dragActive 
+                    ? 'border-blue-500 bg-blue-50/60' 
+                    : 'border-slate-300 hover:border-blue-400 bg-white hover:bg-slate-50/50'
+                }`}
               >
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
-                    {getFileIcon(f.mimeType)}
-                  </div>
-                  <div className="min-w-0">
-                    <h4 className="font-bold text-xs text-slate-800 truncate" title={f.name}>
-                      {f.name}
-                    </h4>
-                    <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                      {formatBytes(f.size)} • {new Date(f.createdTime).toLocaleDateString(undefined, { dateStyle: 'short' })}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  disabled={isUploading}
+                />
+                
+                {isUploading ? (
+                  <div className="py-4 space-y-2 flex flex-col items-center">
+                    <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
+                    <p className="text-[11px] font-semibold text-blue-700 max-w-[200px] leading-snug">
+                      {uploadProgressMsg}
                     </p>
                   </div>
-                </div>
-
-                {/* Operations */}
-                <div className="flex items-center gap-1.5 self-end sm:self-auto">
-                  <button 
-                    onClick={() => setSelectedFileToLink(f)}
-                    className="p-1.5 bg-slate-50 text-slate-600 hover:bg-slate-900 hover:text-white rounded-lg transition-all text-[10px] font-bold flex items-center gap-1 border border-slate-200"
-                    title="Link document to task"
-                  >
-                    <Link className="h-3 w-3" /> Link Task
-                  </button>
-                  <button 
-                    onClick={() => copyToClipboard(f.webViewLink, f.id)}
-                    className="p-1.5 bg-slate-50 text-slate-600 hover:bg-slate-900 hover:text-white rounded-lg transition-all border border-slate-200"
-                    title="Copy URL"
-                  >
-                    {copiedId === f.id ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                  <a 
-                    href={f.webViewLink} 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    className="p-1.5 bg-slate-50 text-slate-600 hover:bg-slate-900 hover:text-white rounded-lg transition-all border border-slate-200"
-                    title="Open in Google Drive"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <button 
-                    onClick={() => { setDeleteError(null); setFileToDelete(f); }}
-                    disabled={deletingFileId === f.id}
-                    className="p-1.5 bg-rose-50 text-rose-600 hover:bg-rose-500 hover:text-white rounded-lg transition-all disabled:opacity-50"
-                    title="Hapus berkas"
-                  >
-                    {deletingFileId === f.id ? (
-                      <Loader2 className="h-3 w-3 animate-spin text-rose-600" />
-                    ) : (
-                      <Trash2 className="h-3 w-3" />
-                    )}
-                  </button>
-                </div>
+                ) : (
+                  <>
+                    <FileUp className="h-8 w-8 text-slate-400" />
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-bold text-slate-700">Tarik berkas Anda di sini</p>
+                      <p className="text-[10px] text-slate-400">atau klik untuk menelusuri komputer</p>
+                    </div>
+                  </>
+                )}
               </div>
-            ))
-          )}
-        </div>
-
-      </div>
-
-      {/* ================= LINK SUCCESS TOAST ================= */}
-      {linkSuccessToast && (
-        <div className="fixed bottom-5 right-5 bg-emerald-900 text-white px-4 py-3 rounded-xl shadow-xl text-xs font-semibold flex items-center gap-2 z-50 animate-bounce">
-          <Check className="h-4 w-4 text-emerald-400" />
-          <span>{linkSuccessToast}</span>
-        </div>
-      )}
-
-      {/* ================= DELETE CONFIRMATION MODAL ================= */}
-      {fileToDelete && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-2xl w-full max-w-sm overflow-hidden">
-            <div className="p-4 border-b border-rose-100 flex items-center justify-between bg-rose-50/70">
-              <div className="flex items-center gap-2 text-rose-700">
-                <Trash2 className="h-4 w-4 text-rose-600" />
-                <h3 className="font-bold text-sm">Hapus Berkas</h3>
-              </div>
-              <button 
-                onClick={() => { setFileToDelete(null); setDeleteError(null); }} 
-                className="p-1 text-slate-400 hover:text-slate-900 rounded-lg"
-              >
-                <X className="h-5 w-5" />
-              </button>
             </div>
 
-            <div className="p-5 space-y-4">
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Apakah Anda yakin ingin menghapus berkas ini dari folder Google Drive proyek?
-              </p>
-
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-3">
-                <div className="p-2 bg-white rounded-lg border border-slate-100 shadow-2xs">
-                  {getFileIcon(fileToDelete.mimeType)}
+            {/* Folder Files API View / Deletion list */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col h-[280px]">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2">
+                <div className="flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5 text-slate-500" />
+                  <span className="font-bold text-xs text-slate-800">Daftar Berkas & Aksi Hapus</span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <span className="font-bold text-xs text-slate-900 block truncate">{fileToDelete.name}</span>
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    {formatBytes(fileToDelete.size)} • {fileToDelete.createdTime ? new Date(fileToDelete.createdTime).toLocaleDateString() : ''}
-                  </span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => accessToken && fetchDriveApiFiles()}
+                  disabled={!accessToken || isListingLoading}
+                  className="p-1 text-slate-400 hover:text-blue-600 disabled:opacity-30 rounded-md hover:bg-slate-50 transition-all cursor-pointer"
+                  title="Segarkan daftar berkas"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isListingLoading ? 'animate-spin text-blue-600' : ''}`} />
+                </button>
               </div>
 
-              {deleteError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 text-rose-600 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <span className="font-bold block mb-0.5">Gagal Menghapus Berkas</span>
-                    <p className="text-[11px] font-mono break-words">{typeof deleteError === 'string' ? deleteError : (deleteError.message || String(deleteError))}</p>
-                  </div>
+              {!accessToken ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-4 text-center space-y-2">
+                  <Lock className="h-6 w-6 text-slate-400" />
+                  <span className="text-[11px] font-bold text-slate-700">Google API Belum Terkoneksi</span>
+                  <p className="text-[10px] text-slate-400 leading-normal max-w-[200px]">
+                    Hubungkan akun Google Drive Anda untuk melihat berkas secara terprogram dan menghapusnya.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleTriggerReauth}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded text-[10px] shadow-sm cursor-pointer transition-all mt-1"
+                  >
+                    Hubungkan API Sekarang
+                  </button>
+                </div>
+              ) : isListingLoading && filteredApiFiles.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-4">
+                  <Loader2 className="h-6 w-6 text-blue-600 animate-spin" />
+                  <span className="text-[10px] text-slate-500 mt-2 font-medium">Memuat berkas...</span>
+                </div>
+              ) : listingError ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-rose-600 space-y-1">
+                  <AlertCircle className="h-5 w-5" />
+                  <span className="text-[10px] font-bold">Kesalahan Memuat Berkas</span>
+                  <p className="text-[9px] leading-relaxed text-rose-500">{listingError}</p>
+                </div>
+              ) : filteredApiFiles.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-slate-400 space-y-1">
+                  <FolderOpen className="h-6 w-6 text-slate-300" />
+                  <span className="text-[10px] font-semibold text-slate-600">Folder Kosong</span>
+                  <p className="text-[9px] text-slate-400 leading-normal max-w-[180px]">
+                    Gunakan panel atas untuk mengunggah atau drag-and-drop dokumen pertama Anda.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                  {filteredApiFiles.map(file => (
+                    <div 
+                      key={file.id} 
+                      className="p-2 border border-slate-100 bg-slate-50/50 rounded-lg hover:bg-slate-100/60 transition-all flex items-center justify-between gap-2 text-[10px]"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-slate-700 truncate" title={file.name}>
+                          {file.name}
+                        </div>
+                        <p className="text-[8px] text-slate-400 mt-0.5">
+                          MIME: {file.mimeType.split('/').pop()} {file.size ? `• ${file.size}` : ''}
+                        </p>
+                      </div>
+
+                      {deleteConfirmId === file.id ? (
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteFile(file.id, file.name, file.webViewLink)}
+                            disabled={isDeletingId === file.id}
+                            className="px-2 py-0.5 bg-rose-600 text-white hover:bg-rose-700 rounded text-[9px] font-bold transition-all border border-rose-600 cursor-pointer shadow-xs"
+                          >
+                            {isDeletingId === file.id ? 'Menghapus...' : 'Ya, Hapus'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteConfirmId(null)}
+                            disabled={isDeletingId === file.id}
+                            className="px-1.5 py-0.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded text-[9px] font-medium transition-all border border-slate-200 cursor-pointer"
+                          >
+                            Batal
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleQuickLink(file.webViewLink)}
+                            className="px-1.5 py-0.5 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded text-[9px] font-bold transition-all border border-blue-100 cursor-pointer"
+                            title="Tautkan berkas ini ke tugas di bawah"
+                          >
+                            Tautkan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteConfirmId(file.id)}
+                            className="p-1 bg-rose-50 text-rose-600 hover:bg-rose-500 hover:text-white rounded border border-rose-100 transition-all cursor-pointer"
+                            title="Hapus berkas dari Google Drive"
+                          >
+                            <Trash className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
-
-              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
-                <button 
-                  type="button" 
-                  onClick={() => { setFileToDelete(null); setDeleteError(null); }}
-                  disabled={deletingFileId === fileToDelete.id}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-all disabled:opacity-50"
-                >
-                  Batal
-                </button>
-                <button 
-                  type="button"
-                  onClick={executeDeleteFile}
-                  disabled={deletingFileId === fileToDelete.id}
-                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-rose-600/20 transition-all disabled:opacity-50"
-                >
-                  {deletingFileId === fileToDelete.id ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Menghapus...
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Ya, Hapus Berkas
-                    </>
-                  )}
-                </button>
-              </div>
             </div>
+
           </div>
         </div>
-      )}
+      </div>
 
-      {/* ================= LINK FILE TO TASK MODAL ================= */}
-      {selectedFileToLink && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-2xl w-full max-w-sm">
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-2xl">
-              <h3 className="font-bold text-sm text-slate-900">Link Document To Task</h3>
-              <button onClick={() => setSelectedFileToLink(null)} className="p-1 text-slate-400 hover:text-slate-900 rounded-lg">
-                <X className="h-5 w-5" />
-              </button>
+      {/* Linking & Attachments Panel */}
+      <div id="task-linker-form" className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* Link Form Panel */}
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between h-fit space-y-4">
+          <div>
+            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+              <Paperclip className="h-4 w-4 text-blue-600" />
+              Tautkan Berkas ke Tugas
+            </h3>
+            <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed font-medium">
+              Salin tautan berkas dari folder Google Drive di atas, atau klik tombol <strong>"Tautkan"</strong> pada daftar berkas, lalu kaitkan dengan tugas Master Control Plan.
+            </p>
+          </div>
+
+          <form onSubmit={handleLinkFileToTaskSubmit} className="space-y-3.5 pt-2">
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold text-slate-700">Pilih Tugas / Kegiatan:</label>
+              <select
+                required
+                value={targetTaskId}
+                onChange={e => setTargetTaskId(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-250 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="">-- Pilih Tugas Target --</option>
+                {validTasks.map(t => (
+                  <option key={t.id} value={t.id}>
+                    [{t.wbs}] {t.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <form onSubmit={handleLinkFileToTaskSubmit} className="p-5 space-y-4">
-              <div>
-                <span className="text-[10px] uppercase font-mono font-bold text-slate-400 block mb-1">Document Selected:</span>
-                <span className="font-bold text-xs text-slate-800 block truncate">{selectedFileToLink.name}</span>
-              </div>
+            <div className="space-y-1">
+              <label className="block text-[11px] font-bold text-slate-700">Tautan Berkas Google Drive:</label>
+              <input
+                type="url"
+                required
+                placeholder="https://drive.google.com/file/d/..."
+                value={pastedUrl}
+                onChange={e => setPastedUrl(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-250 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              />
+              <p className="text-[9px] text-slate-400 font-medium">
+                Tip: Pastikan akses diatur agar dapat diakses oleh publik/tim BRIN.
+              </p>
+            </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Select Task Target</label>
-                <select 
-                  value={targetTaskId} 
-                  onChange={e => setTargetTaskId(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
-                  required
-                >
-                  <option value="">-- Choose Control Task --</option>
-                  {tasks.map(t => (
-                    <option key={t.id} value={t.id}>
-                      [{t.wbs}] {t.name.length > 32 ? t.name.slice(0, 30) + '...' : t.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <button
+              type="submit"
+              disabled={!targetTaskId || !pastedUrl.trim()}
+              className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-bold rounded-lg transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer mt-1"
+            >
+              <Link className="h-3.5 w-3.5" />
+              Tautkan ke Kegiatan
+            </button>
+          </form>
+        </div>
 
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-                <button 
-                  type="button" 
-                  onClick={() => setSelectedFileToLink(null)}
-                  className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold"
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit"
-                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1 shadow-md"
-                >
-                  Link Document
-                </button>
-              </div>
-            </form>
+        {/* Linked Attachments List */}
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm lg:col-span-2 flex flex-col justify-between space-y-4">
+          <div>
+            <h3 className="font-bold text-sm text-slate-800">Daftar Lampiran Terhubung ({activeAttachments.length})</h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Semua dokumen Google Drive yang saat ini ditautkan ke kegiatan Master Control Plan.
+            </p>
           </div>
+
+          <div className="flex-1 overflow-y-auto max-h-[360px] space-y-2.5 pr-1 min-h-[220px]">
+            {activeAttachments.length === 0 ? (
+              <div className="py-12 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50 flex flex-col items-center justify-center space-y-2">
+                <Paperclip className="h-7 w-7 text-slate-350" />
+                <span className="text-xs font-bold text-slate-600">Belum Ada Lampiran Terhubung</span>
+                <p className="text-[10px] text-slate-400 max-w-xs leading-normal">
+                  Gunakan formulir di sebelah kiri untuk menautkan tautan dokumen Google Drive ke tugas atau kegiatan proyek.
+                </p>
+              </div>
+            ) : (
+              activeAttachments.map(att => (
+                <div 
+                  key={att.taskId} 
+                  className="p-3 border border-slate-150 bg-slate-50/40 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between"
+                >
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className="p-2 bg-blue-50 text-blue-600 border border-blue-100 rounded-lg flex-shrink-0">
+                      <FileText className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-bold font-mono text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-150">
+                          {att.wbs}
+                        </span>
+                        <h4 className="font-bold text-xs text-slate-800 truncate max-w-sm" title={att.taskName}>
+                          {att.taskName}
+                        </h4>
+                      </div>
+                      <p className="text-[10px] text-slate-500 truncate mt-1 max-w-xs sm:max-w-md font-mono" title={att.url}>
+                        {att.url}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                    <button 
+                      onClick={() => copyToClipboard(att.url, att.taskId)}
+                      className="p-1.5 bg-white text-slate-600 hover:bg-slate-900 hover:text-white rounded-lg transition-all border border-slate-200 cursor-pointer"
+                      title="Salin tautan"
+                    >
+                      {copiedId === att.taskId ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                    </button>
+                    <a 
+                      href={att.url} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="p-1.5 bg-white text-slate-600 hover:bg-slate-900 hover:text-white rounded-lg transition-all border border-slate-200 flex items-center justify-center"
+                      title="Buka Berkas"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                    <button 
+                      onClick={() => handleUnlink(att.taskId, att.taskName)}
+                      className="p-1.5 bg-rose-50 text-rose-600 hover:bg-rose-500 hover:text-white rounded-lg transition-all border border-rose-200 cursor-pointer"
+                      title="Hapus Tautan"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl text-xs font-semibold flex items-center gap-2 z-50 animate-bounce border border-slate-800">
+          <Check className="h-4 w-4 text-emerald-400" />
+          <span>{toastMessage}</span>
         </div>
       )}
 

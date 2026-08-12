@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Task, Milestone, TeamMember, Risk, ActivityLog } from '../types';
+import { Task, Milestone, TeamMember, Risk, ActivityLog, DriveFile } from '../types';
 
 export const INITIAL_BRIN_TASKS: Task[] = [
   {
@@ -108,3 +108,6 @@ export const INITIAL_BRIN_LOGS: ActivityLog[] = [
     details: 'Initial database set up for BRIN Master Control Plan Project'
   }
 ];
+
+export const INITIAL_BRIN_DOCUMENTS: DriveFile[] = [];
+
